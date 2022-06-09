@@ -2,23 +2,17 @@ import numpy as np
 import math
 from scipy.stats import multivariate_normal as normal
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 import matplotlib
 matplotlib.use("TkAgg")
 
 
 class GaussianDistrib:
-    def __init__(self, dim, pi=None, eta=None, lambd=None, psi=None):
+    def __init__(self, pi=None, eta=None, lambd=None, psi=None):
         if pi is None:
             pi = 1
-        if eta is None:
-            eta = np.ones(dim)
-        if psi is None:
-            psi = np.eye(dim)
-        if lambd is None:
-            lambd = np.eye(dim)
 
         # Parameters
-        self.dim = dim
         self.pi = pi
         self.eta = eta
         self.lambd = lambd
@@ -47,6 +41,8 @@ class DGMM:
             return [GaussianDistrib(dim, pi) for _ in range(layer_size)]
 
         self.dims = dims
+        # Dimenisions on the next layer
+        self.next_dims = dims[1:] + dims[-1:]
         self.layer_sizes = layer_sizes
         self.num_layers = len(layer_sizes)
         self.layers = [init_layer(layer_sizes[i], dims[i])
@@ -58,71 +54,91 @@ class DGMM:
         self.plot_predictions = plot_predictions
         if self.plot_predictions:
             plt.ion()
-            fig, self.ax = plt.subplots(2, 1)
+            self.fig, self.ax = plt.subplots(2, 1)
             self.ax[0].set_title("Predictions plot")
             self.ax[0].set_title("Distributions plot")
             plt.draw()
             plt.show(block=False)
         self.init = init
 
-    def plot_prediction(self, data):
-        COLORS = ['red', 'blue', 'green']
-
+    def plot_prediction(self, data, iter_i):
         probs = np.array([self.layers[0][dist_i].prob_theta_given_y
-                         for dist_i in range(len(self.layers[0]))])
-        clusters = np.argmax(probs, axis=0)
+                         for dist_i in range(len(self.layers[0]))]).T
         sample, sample_clust = self.random_sample(100)
 
+        colors = cm.rainbow(np.linspace(0, 1, probs.shape[1]))
+
+        # Draw the predictions plot
         self.ax[0].clear()
+        data_colors = np.clip(probs @ colors, 0, 1)
+        self.ax[0].scatter(data[:, 0], data[:, 1], color=data_colors)
+        self.ax[0].set_title("Probabilities")
+
+        # Draw the sample plot
         self.ax[1].clear()
         for dist_i in range(len(self.layers[0])):
-            values = data[clusters == dist_i]
             s_values = sample[sample_clust == dist_i]
-            self.ax[0].plot(values[:, 0], values[:, 1], color=COLORS[dist_i],
-                            label="cluster %d" % (dist_i + 1),
-                            linestyle='', marker='.', markersize=8)
-            self.ax[1].plot(s_values[:, 0], s_values[:, 1], color=COLORS[dist_i],
-                            label="cluster %d" % (dist_i + 1),
-                            linestyle='', marker='.', markersize=8)
-
-        self.ax[0].legend()
+            self.ax[1].scatter(s_values[:, 0], s_values[:, 1],
+                               color=colors[dist_i],
+                               label="cluster %d" % (dist_i + 1))
+        self.ax[1].set_title("Sample")
         self.ax[1].legend()
+
+        # for dist_i in range(len(self.layers[0])):
+        #     values = data[clusters == dist_i]
+        #     s_values = sample[sample_clust == dist_i]
+        #     self.ax[0].scatter(values[:, 0], values[:, 1], color=COLORS[dist_i]),
+        #                     label="cluster %d" % (dist_i + 1),
+        #                     linestyle='', marker='.', markersize=8)
+        #     self.ax[1].plot(s_values[:, 0], s_values[:, 1], color=COLORS[dist_i],
+        #                     label="cluster %d" % (dist_i + 1),
+        #                     linestyle='', marker='.', markersize=8)
+
+        # Draw the plots
+        self.fig.suptitle("Iteration %d" % (iter_i + 1))
         plt.draw()
         plt.pause(0.001)
 
-    def compute_likelihood(self, data):
-        # Start from last layer as standard normal
+    def compute_likelihood(self, data, iter_i):
+        # The variables pi, sigma, mu will hold the values for each path
+        #   starting from the last layer to a given layer. There is only one
+        #   path at the last layer - standard normal distribution
         pi = [1]
         sigma = [np.eye(self.dims[-1])]
         mu = [np.zeros(self.dims[-1])]
 
-        # Move down to the first layer
+        # Move down from the last to the first layer
         for layer_i in range(self.num_layers - 1, -1, -1):
             new_pi, new_mu, new_sigma = [], [], []
 
-            for comb_current in range(self.layer_sizes[layer_i]):
-                distrib = self.layers[layer_i][comb_current]
-                distrib_pi, distrib_mu, distrib_sigma = [], [], []
+            # Loop through distributions of this layer
+            for dist_i in range(self.layer_sizes[layer_i]):
+                dist = self.layers[layer_i][dist_i]
+                dist_pi, dist_mu, dist_sigma = [], [], []
 
-                for comb_prev in range(len(sigma)):
-                    # Compute new pi, mu and sigma
-                    distrib_pi.append(distrib.pi * pi[comb_prev])
-                    distrib_mu.append(distrib.eta + distrib.lambd @ mu[comb_prev])
-                    sigma_i = distrib.psi + distrib.lambd @ sigma[comb_prev] @ distrib.lambd.T
-                    sigma_i = self.make_spd(sigma_i)
-                    distrib_sigma.append(sigma_i)
+                # Loop through the paths at the previous layer and extend them
+                #   with the current distribution
+                # Note: this is the same order that self.paths are generated
+                #   (upper layers repeated for each dist_i of lower layers)
+                for prev_path in range(len(sigma)):
+                    # Compute new pi, mu and sigma (also make it spd)
+                    dist_pi.append(dist.pi * pi[prev_path])
+                    dist_mu.append(dist.eta + dist.lambd @ mu[prev_path])
+                    sigma_i = dist.psi + dist.lambd @ sigma[prev_path] @ dist.lambd.T
+                    dist_sigma.append(self.make_spd(sigma_i))
 
                 # Save the values inside distribution
-                distrib.pi_given_path = distrib_pi
-                distrib.mu_given_path = distrib_mu
-                distrib.sigma_given_path = distrib_sigma
-                # Append to all the mus and sigmas
-                new_pi += distrib_pi
-                new_mu += distrib_mu
-                new_sigma += distrib_sigma
+                dist.pi_given_path = dist_pi
+                dist.mu_given_path = dist_mu
+                dist.sigma_given_path = dist_sigma
+                # Append to all the mus and sigmas (at current layer)
+                new_pi += dist_pi
+                new_mu += dist_mu
+                new_sigma += dist_sigma
 
             mu, sigma, pi = new_mu, new_sigma, new_pi
 
+        # Initialize and fill the variables
         prob_y_given_path = []
         prob_y_and_path = []
         for path_i in range(len(self.paths)):
@@ -133,17 +149,17 @@ class DGMM:
         # WTF? why the original code rescaled 2 times
         # prob_y_and_path /= np.max(prob_y_and_path, axis=0, keepdims=True)
 
-        # dims: [paths, num samples]
+        # dims = [paths, num samples] for all below
         prob_y_given_path = np.array(prob_y_given_path)
         prob_y_and_path = np.array(prob_y_and_path)
-
-        prob_path_given_y = (prob_y_and_path / np.sum(prob_y_and_path, axis=0, keepdims=True))
         prob_y = np.sum(prob_y_and_path, axis=0)
+        prob_path_given_y = (prob_y_and_path / prob_y)
 
         for layer_i in range(len(self.layer_sizes)):
             for dist_i in range(self.layer_sizes[layer_i]):
                 # Sum over all the combinations where this distribution is
-                # present to calculate the likelihood of its params
+                #   present to calculate the probability that path goes through
+                #   this distribution
                 index = self.paths[:, layer_i] == dist_i
                 dist = self.layers[layer_i][dist_i]
                 dist.prob_theta_given_y = prob_path_given_y[index].sum(axis=0)
@@ -153,25 +169,26 @@ class DGMM:
         # hard.ps.y.list <- sampled
 
         if self.plot_predictions:
-            self.plot_prediction(data)
+            self.plot_prediction(data, iter_i)
 
         return prob_y, prob_y_given_path, prob_y_and_path, prob_path_given_y
 
     def _init_params(self, data):
         if self.init == 'random':
             # Initialization
-            for dist_i in range(len(self.layers[0])):
-                self.layers[0][dist_i].eta = data[np.random.choice(len(data))]
-            for layer_i in range(1, self.num_layers):
-                new_data = np.zeros([])
-                for dist_i in range(len(self.layers[layer_i])):
+            for layer_i in range(self.num_layers):
+                for dist_i in range(self.layer_sizes[layer_i]):
                     dist = self.layers[layer_i][dist_i]
-                    dist.eta = normal.rvs(
-                        mean=np.zeros(self.dims[layer_i]),
-                        cov=0.1 / self.num_layers ** 2,
-                        size=1)[0]
-                    dist.psi = np.eye(self.dims[layer_i]) / self.num_layers ** 2
+                    dim, dim_next = self.dims[layer_i], self.next_dims[layer_i]
 
+                    if layer_i == 0:
+                        dist.eta = data[np.random.choice(len(data))]
+                    else:
+                        dist.eta = normal.rvs(mean=np.zeros(dim), cov=0.1)
+                    dist.psi = np.eye(dim) / self.num_layers ** 2
+                    dist.lambd = np.random.random([dim, dim_next])
+                    dist.lambd /= dist.lambd.sum(axis=1, keepdims=True)
+                    dist.pi = 1 / self.layer_sizes[layer_i]
             return
 
         if self.init == 'kmeans':
@@ -184,46 +201,55 @@ class DGMM:
         from sklearn.decomposition import FactorAnalysis
 
         for layer_i in range(self.num_layers):
+            next_data = np.zeros([len(data), self.dims[layer_i]])
+
             for dist_i in range(len(self.layers[layer_i])):
                 index = self.paths[paths_i][:, layer_i] == dist_i
                 values = data[index]
                 fa = FactorAnalysis(n_components=self.dims[layer_i],
                                     rotation='varimax')
-                fa.fit(data)
+                fa.fit(values)
 
                 dist = self.layers[layer_i][dist_i]
                 dist.eta = fa.mean_
                 dist.lambd = fa.components_.T
                 dist.psi = np.diag(fa.noise_variance_)
 
+                next_data[index] = fa.transform(values)
+
+            data = next_data
+
         # return np.arange(len(self.paths)) \
         #            .repeat(math.ceil(len(data) / len(self.paths)))[:len(data)]
 
-    def fit(self, data, iter=10):
+    def fit(self, data, num_iter=10):
         inv = np.linalg.pinv
         num_observations = len(data)
 
         self._init_params(data)
 
-        for iter_i in range(iter):
+        for iter_i in range(num_iter):
             prob_y, prob_y_given_path, prob_y_and_path, prob_path_given_y =\
-                self.compute_likelihood(data)
+                self.compute_likelihood(data, iter_i)
 
             # Initialize the variables
             # Shape [num_observations, dim[layer_i - 1]]
-            values_times_probs = data
+            values = data
 
             for layer_i in range(self.num_layers):
                 layer = self.layers[layer_i]
-                dim = self.dims[layer_i]
+                dim = self.next_dims[layer_i]
 
                 # The combinations of lower layers are not included
                 layer_paths_num = math.prod(self.layer_sizes[layer_i:])
                 layer_paths = self.paths[:layer_paths_num]
 
                 # Initialize variables that will be filled for each path
-                rho_times_path_prob = np.zeros([len(layer), num_observations, dim])
-                expect_zz_times_path_prob = np.zeros([len(layer), num_observations, dim, dim])
+                # The expected values of expressions given distribution and sample y
+                # E(z) at layer_i + 1, E(z.T @ z) at layer_i + 1,
+                # sampled z for next layer
+                exp_z_given_dist_y = np.zeros([len(layer), num_observations, dim])
+                exp_zz_given_dist_y = np.zeros([len(layer), num_observations, dim, dim])
                 z_times_path_prob = np.zeros([len(layer), num_observations, dim])
 
                 for path_i in range(layer_paths_num):
@@ -247,7 +273,7 @@ class DGMM:
                     ksi = self.make_spd(ksi)
 
                     # Shape [num_observations, dim[l-1]]
-                    rho = (ksi @ (lambd.T @ inv(psi) @ (values_times_probs - eta).T
+                    rho = (ksi @ (lambd.T @ inv(psi) @ (values - eta).T
                                  + (inv(sigma) @ mu.reshape([-1, 1])))).T
 
                     # rho @ rho.T
@@ -256,54 +282,64 @@ class DGMM:
                     expect_zz_given_path = rho_times_rho_T + ksi
 
                     # Sample from the distribution
-                    z_sample = normal.rvs(cov=ksi, size=num_observations) + rho
+                    z_sample = normal.rvs(cov=ksi, size=num_observations)\
+                                   .reshape([num_observations, -1]) + rho
 
                     # TODO rho_l, last layer
 
                     # Probability of the whole path given y
                     # Shape [num_observations, 1]
-                    prob_path_given_y = dist.prob_theta_given_y * \
-                        math.prod([self.layers[i][path[i]].prob_theta_given_y
-                                   for i in range(layer_i + 1, len(path))])
+                    prob_path_given_y = math.prod(
+                        [self.layers[i][path[i]].prob_theta_given_y
+                         for i in range(layer_i + 1, len(path))]) * np.array(1)
                     prob_path_given_y = prob_path_given_y.reshape([-1, 1])
 
-                    rho_times_path_prob[dist_index] += rho * prob_path_given_y
-                    expect_zz_times_path_prob[dist_index] += expect_zz_given_path * prob_path_given_y.reshape([-1, 1, 1])
+                    exp_z_given_dist_y[dist_index] += rho * prob_path_given_y
+                    exp_zz_given_dist_y[dist_index] += expect_zz_given_path * prob_path_given_y.reshape([-1, 1, 1])
                     z_times_path_prob[dist_index] += z_sample * prob_path_given_y
 
                 # Compute the best parameters estimate
                 for dist_i in range(len(layer)):
                     dist = layer[dist_i]
-                    rho_t_pp = rho_times_path_prob[dist_i]
+                    exp_z = exp_z_given_dist_y[dist_i]
+                    exp_zz = exp_zz_given_dist_y[dist_i]
 
                     probs = layer[dist_i].prob_theta_given_y.reshape([-1, 1])
                     denom = probs.sum()
                     # Shape [dim, dim]
-                    expect_zz = np.sum(expect_zz_times_path_prob[dist_i], 0) / denom
-                    normalized = (values_times_probs - dist.eta) * probs
-                    lambd = normalized.T @ (rho_t_pp * probs) \
-                        @ inv(expect_zz) / denom
-                    psi = normalized.T @ normalized - \
-                        normalized.T @ (rho_t_pp * probs) @ lambd / denom
-                    eta = ((values_times_probs - (lambd @ rho_t_pp.T).T)
-                           * probs / denom).sum(axis=0)
+                    normalized = values - dist.eta
+                    lambd = np.sum([normalized[i:i+1].T @
+                        exp_z[i:i+1] @ inv(exp_zz[i]) * probs[i]
+                        for i in range(num_observations)], axis=0) / denom
+                    psi = np.sum([(normalized[i:i+1].T @ normalized[i:i+1] -
+                        normalized[i:i+1].T @ exp_z[i:i+1] @ lambd.T) * probs[i]
+                        for i in range(num_observations)], axis=0) / denom
+                    psi = self.make_spd(psi)
+                    eta = ((values - (lambd @ exp_z.T).T) * probs)\
+                              .sum(axis=0) / denom
                     pi = probs.mean()
+
+                    # lambd = normalized.T @ (exp_z * probs) \
+                    #     @ inv(expect_zz) / denom
+                    # psi = normalized.T @ normalized - \
+                    #     normalized.T @ (exp_z * probs) @ lambd / denom
 
                     dist.pi, dist.eta, dist.lambd, dist.psi = pi, eta, lambd, psi
 
                 # Fill the values for the next layer
-                values_times_probs = z_times_path_prob.sum(0)
+                # Expected value of sample
+                values = z_times_path_prob.sum(0)
 
-        self.compute_likelihood(data)
+        self.compute_likelihood(data, num_iter)
         return np.array([self.layers[0][dist_i].prob_theta_given_y
-                         for dist_i in range(len(self.layers[0]))])
+                         for dist_i in range(len(self.layers[0]))]).T
 
     def random_sample(self, num):
         values = []
         dists = []
 
         for i in range(num):
-            value = normal.rvs(mean=np.zeros(self.dims[-1])).T
+            value = normal.rvs(mean=np.zeros(self.dims[-1])).T * np.array([1])
             dist = 0
 
             for layer_i in range(len(self.layers) - 1, -1, -1):
@@ -325,7 +361,7 @@ class DGMM:
     @staticmethod
     def make_spd(A):
         """
-        Find the nearest-positive definite matrix to the given
+        Find the nearest symmetric positive definite (SPD) matrix to the given
         Source: https://itecnote.com/tecnote/python-convert-matrix-to-positive-semi-definite/
         """
         # symmetric
