@@ -6,33 +6,72 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import math
 from DGMM import DGMM
-from sklearn import metrics
+from sklearn import metrics, datasets, preprocessing
+from sklearn.cluster import KMeans
+import pandas as pd
 
-# l11 = stats.multivariate_normal([0, 0])
-# l12 = stats.multivariate_normal([5, 5])
-# l21 = stats.multivariate_normal([1, 1])
-#
-# x1 = np.concatenate([l11.rvs(1000), l12.rvs(500)])
-# x2 = l21.rvs(1500) + (np.array([[1, 1], [0, 1]]) @ x1.T).T
-#
-# plt.figure(figsize=(5, 5))
-# plt.plot(x1[:, 0], x1[:, 1], 'b.')
-# plt.plot(x2[:, 0], x2[:, 1], 'r.')
 
-l11 = normal([0, 0, 0])
-l12 = normal([5, 5, 0])
-l13 = normal([-5, 7, 0])
+def test_on_data(alg, data, labels):
+    scaler = preprocessing.StandardScaler()
+    data = scaler.fit_transform(data)
 
-data = np.concatenate([l11.rvs(500), l12.rvs(500), l13.rvs(500)])
-labels = np.concatenate([np.ones(500) * 0, np.ones(500) * 1, np.ones(500) * 2])
+    if hasattr(alg, "fit_predict"):
+        alg.fit_predict(data)
+        clust = alg.labels_
+    else:
+        probs = alg.fit(data)
+        clust = np.argmax(probs, axis=1)
 
-dgmm = DGMM([3, 4, 2], [3, 2, 2], init='random')
-probs = dgmm.fit(data, 10)
-clust = np.argmax(probs, axis=1)
+    print("Silhouette score = ", metrics.silhouette_score(data, labels))
+    print("Accuracy = ", metrics.accuracy_score(labels, clust))
+    print("ARI = ", metrics.adjusted_rand_score(labels, clust))
 
-print("ARI = ", metrics.adjusted_rand_score(labels, clust))
 
-plt.show()
+def load_ecoli():
+    data = pd.read_csv('data/ecoli.csv', header=None)
+    data, labels = data.values[:,:-1].astype('float'), data.values[:,-1]
+    mapping = {v: i for i, v in enumerate(np.unique(labels))}
+    labels = np.array([mapping[x] for x in labels])
+    return data, labels
+
+
+def manual_dataset():
+    l11 = normal([0, 0, 0])
+    l12 = normal([5, 5, 0])
+    l13 = normal([-5, 7, 0])
+    l14 = normal([-5, 3, 0])
+
+    data = np.concatenate([
+        l11.rvs(500),
+        l12.rvs(500),
+        l13.rvs(500),
+        l14.rvs(500)
+    ])
+    labels = np.concatenate([
+        np.ones(500) * 0,
+        np.ones(500) * 1,
+        np.ones(500) * 2,
+        np.ones(500) * 3
+    ])
+
+    return data, labels
+
+
+# data, labels = datasets.load_wine(return_X_y=True)
+data, labels = load_ecoli()
+alg = KMeans(3, max_iter=100, n_init=30)
+alg = DGMM([7, 5, 3], [7, 6, 2], init='kmeans', plot_predictions=True, num_iter=30)
+
+# data, labels = manual_dataset()
+# alg = KMeans(3, max_iter=100, n_init=30)
+# alg = DGMM([3, 5], [3, 2], init='kmeans', plot_predictions=True, num_iter=10)
+
+test_on_data(alg, data, labels)
+
+try:
+    plt.pause(1e10)
+except Exception as e:
+    pass
 
 if __name__ == "__main__":
     pass

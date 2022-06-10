@@ -3,6 +3,7 @@ import math
 from scipy.stats import multivariate_normal as normal
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import matplotlib.patches
 import matplotlib
 matplotlib.use("TkAgg")
 
@@ -35,7 +36,7 @@ class GaussianDistrib:
 
 class DGMM:
     def __init__(self, layer_sizes, dims, plot_predictions=True,
-                 init='kmeans'):
+                 init='kmeans', num_iter=10):
         def init_layer(layer_size, dim):
             pi = 1 / layer_size
             return [GaussianDistrib(dim, pi) for _ in range(layer_size)]
@@ -47,6 +48,7 @@ class DGMM:
         self.num_layers = len(layer_sizes)
         self.layers = [init_layer(layer_sizes[i], dims[i])
                        for i in range(len(dims))]
+        self.num_iter = num_iter
 
         self.paths = self.get_paths_permutations(self.layer_sizes)
 
@@ -62,6 +64,19 @@ class DGMM:
         self.init = init
 
     def plot_prediction(self, data, iter_i):
+        def draw_distribution(mean, cov, ax, color):
+            # How many sigmas to draw. 2 sigmas is >95%
+            N_SIGMA = 2
+            mean, cov = mean[:2], cov[:2,:2]
+            # Since covariance is SPD, svd will produce orthogonal eigenvectors
+            U, S, V = np.linalg.svd(cov)
+            # Calculate the angle of first eigenvector
+            angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
+
+            # Eigenvalues are now width and height
+            ax.add_patch(matplotlib.patches.Ellipse(mean, S[0] * N_SIGMA,
+                S[1] * N_SIGMA, angle, color=[*color[:3], 0.3], linewidth=0))
+
         probs = np.array([self.layers[0][dist_i].prob_theta_given_y
                          for dist_i in range(len(self.layers[0]))]).T
         sample, sample_clust = self.random_sample(100)
@@ -76,28 +91,25 @@ class DGMM:
 
         # Draw the sample plot
         self.ax[1].clear()
-        for dist_i in range(len(self.layers[0])):
+        for dist_i in range(self.layer_sizes[0]):
             s_values = sample[sample_clust == dist_i]
-            self.ax[1].scatter(s_values[:, 0], s_values[:, 1],
-                               color=colors[dist_i],
-                               label="cluster %d" % (dist_i + 1))
+            color = colors[dist_i]
+            self.ax[1].scatter(s_values[:, 0], s_values[:, 1], color=color,
+                               label="cluster %d" % (dist_i + 1), s=10)
+            dist = self.layers[0][dist_i]
+            for path_i in range(len(dist.mu_given_path)):
+                draw_distribution(dist.mu_given_path[path_i],
+                                  dist.sigma_given_path[path_i],
+                                  self.ax[1], color)
+        self.ax[1].set_aspect('equal', 'box')
         self.ax[1].set_title("Sample")
         self.ax[1].legend()
 
-        # for dist_i in range(len(self.layers[0])):
-        #     values = data[clusters == dist_i]
-        #     s_values = sample[sample_clust == dist_i]
-        #     self.ax[0].scatter(values[:, 0], values[:, 1], color=COLORS[dist_i]),
-        #                     label="cluster %d" % (dist_i + 1),
-        #                     linestyle='', marker='.', markersize=8)
-        #     self.ax[1].plot(s_values[:, 0], s_values[:, 1], color=COLORS[dist_i],
-        #                     label="cluster %d" % (dist_i + 1),
-        #                     linestyle='', marker='.', markersize=8)
-
         # Draw the plots
-        self.fig.suptitle("Iteration %d" % (iter_i + 1))
+        self.fig.suptitle("Iteration %d" % iter_i)
         plt.draw()
         plt.pause(0.001)
+        # plt.waitforbuttonpress()
 
     def compute_likelihood(self, data, iter_i):
         # The variables pi, sigma, mu will hold the values for each path
@@ -142,7 +154,7 @@ class DGMM:
         prob_y_given_path = []
         prob_y_and_path = []
         for path_i in range(len(self.paths)):
-            p_y_path = normal.pdf(data, mean=mu[path_i], cov=sigma[path_i])
+            p_y_path = normal.pdf(data, mean=mu[path_i], cov=sigma[path_i], allow_singular=True)
             prob_y_given_path.append(p_y_path)
             prob_y_and_path.append(pi[path_i] * p_y_path)
 
@@ -186,8 +198,29 @@ class DGMM:
                     else:
                         dist.eta = normal.rvs(mean=np.zeros(dim), cov=0.1)
                     dist.psi = np.eye(dim) / self.num_layers ** 2
-                    dist.lambd = np.random.random([dim, dim_next])
+                    dist.lambd = np.random.random([dim, dim_next]) / self.num_layers ** 2
                     dist.lambd /= dist.lambd.sum(axis=1, keepdims=True)
+                    dist.pi = 1 / self.layer_sizes[layer_i]
+            return
+
+        if self.init == 'kmeans':
+            from sklearn.cluster import KMeans
+            kmeans = KMeans(n_clusters=self.layer_sizes[0])
+            kmeans.fit_predict(data)
+
+            for layer_i in range(self.num_layers):
+                for dist_i in range(self.layer_sizes[layer_i]):
+                    dist = self.layers[layer_i][dist_i]
+                    dim, dim_next = self.dims[layer_i], self.next_dims[layer_i]
+
+                    if layer_i == 0:
+                        dist.eta = kmeans.cluster_centers_[dist_i]
+                    else:
+                        dist.eta = normal.rvs(mean=np.zeros(dim), cov=1)
+                    dist.psi = np.eye(dim) / self.num_layers ** 2
+                    dist.lambd = -1 + 2 * np.random.random([dim, dim_next])
+                    dist.lambd /= np.apply_along_axis(
+                        np.linalg.norm, 1, dist.lambd).reshape([-1, 1])
                     dist.pi = 1 / self.layer_sizes[layer_i]
             return
 
@@ -203,7 +236,7 @@ class DGMM:
         for layer_i in range(self.num_layers):
             next_data = np.zeros([len(data), self.dims[layer_i]])
 
-            for dist_i in range(len(self.layers[layer_i])):
+            for dist_i in range(self.layer_sizes[layer_i]):
                 index = self.paths[paths_i][:, layer_i] == dist_i
                 values = data[index]
                 fa = FactorAnalysis(n_components=self.dims[layer_i],
@@ -214,6 +247,7 @@ class DGMM:
                 dist.eta = fa.mean_
                 dist.lambd = fa.components_.T
                 dist.psi = np.diag(fa.noise_variance_)
+                dist.pi = 1 / self.layer_sizes[layer_i]
 
                 next_data[index] = fa.transform(values)
 
@@ -222,13 +256,13 @@ class DGMM:
         # return np.arange(len(self.paths)) \
         #            .repeat(math.ceil(len(data) / len(self.paths)))[:len(data)]
 
-    def fit(self, data, num_iter=10):
+    def fit(self, data):
         inv = np.linalg.pinv
         num_observations = len(data)
 
         self._init_params(data)
 
-        for iter_i in range(num_iter):
+        for iter_i in range(self.num_iter):
             prob_y, prob_y_given_path, prob_y_and_path, prob_path_given_y =\
                 self.compute_likelihood(data, iter_i)
 
@@ -236,6 +270,7 @@ class DGMM:
             # Shape [num_observations, dim[layer_i - 1]]
             values = data
 
+            # Update all the layers one by one
             for layer_i in range(self.num_layers):
                 layer = self.layers[layer_i]
                 dim = self.next_dims[layer_i]
@@ -285,8 +320,6 @@ class DGMM:
                     z_sample = normal.rvs(cov=ksi, size=num_observations)\
                                    .reshape([num_observations, -1]) + rho
 
-                    # TODO rho_l, last layer
-
                     # Probability of the whole path given y
                     # Shape [num_observations, 1]
                     prob_path_given_y = math.prod(
@@ -298,7 +331,7 @@ class DGMM:
                     exp_zz_given_dist_y[dist_index] += expect_zz_given_path * prob_path_given_y.reshape([-1, 1, 1])
                     z_times_path_prob[dist_index] += z_sample * prob_path_given_y
 
-                # Compute the best parameters estimate
+                # Compute the best parameter estimates for each distribution
                 for dist_i in range(len(layer)):
                     dist = layer[dist_i]
                     exp_z = exp_z_given_dist_y[dist_i]
@@ -306,8 +339,8 @@ class DGMM:
 
                     probs = layer[dist_i].prob_theta_given_y.reshape([-1, 1])
                     denom = probs.sum()
-                    # Shape [dim, dim]
                     normalized = values - dist.eta
+                    # Shape [dim, next_dim]
                     lambd = np.sum([normalized[i:i+1].T @
                         exp_z[i:i+1] @ inv(exp_zz[i]) * probs[i]
                         for i in range(num_observations)], axis=0) / denom
@@ -319,22 +352,23 @@ class DGMM:
                               .sum(axis=0) / denom
                     pi = probs.mean()
 
-                    # lambd = normalized.T @ (exp_z * probs) \
-                    #     @ inv(expect_zz) / denom
-                    # psi = normalized.T @ normalized - \
-                    #     normalized.T @ (exp_z * probs) @ lambd / denom
-
                     dist.pi, dist.eta, dist.lambd, dist.psi = pi, eta, lambd, psi
 
                 # Fill the values for the next layer
                 # Expected value of sample
                 values = z_times_path_prob.sum(0)
 
-        self.compute_likelihood(data, num_iter)
+        # Compute the final likelihood to update the dist.prob_theta_give_y
+        self.compute_likelihood(data, self.num_iter)
         return np.array([self.layers[0][dist_i].prob_theta_given_y
                          for dist_i in range(len(self.layers[0]))]).T
 
     def random_sample(self, num):
+        """
+        Randomly sample from the DGMM distribution
+        :return tuple of sampled values and to which distribution each value
+            belongs
+        """
         values = []
         dists = []
 
