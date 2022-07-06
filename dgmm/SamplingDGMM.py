@@ -16,25 +16,21 @@ class SamplingDGMM(AbstractDGMM):
             # Initialize the variables
             # Shape [num_samples, dim[layer_i - 1]]
             values = data
+            values_probs = np.repeat(1, len(values))
 
             # Update all the layers one by one
             for layer_i in range(self.num_layers):
-                if layer_i != 0:
-                    continue
-
                 layer = self.layers[layer_i]
                 dim = self.in_dims[layer_i]
                 dim_out = self.out_dims[layer_i]
 
-                _, prob_paths_given_values = \
+                _, prob_paths_given_values, _, _ = \
                     self.compute_paths_prob_given_out_values(values, layer_i)
 
                 # sampled z for next layer
                 z_in_samples = []
                 z_in_samples_probs = []
                 pis_sum = 0
-
-                exp_log_lik = 0
 
                 for dist_i in range(len(layer)):
                     # The combinations of lower layers are not included
@@ -74,7 +70,7 @@ class SamplingDGMM(AbstractDGMM):
 
                         # Estimate all the variables for current path and add
                         #   up to the global estimates
-                        probs = prob_paths_given_values[path_i].reshape([-1, 1])
+                        probs = prob_paths_given_values[path_i].reshape([-1, 1]) # * values_probs
                         denom += probs.sum()
                         exp_z += (values * probs).sum(axis=0).reshape([-1, 1])
                         exp_zz += (values * probs).T @ values
@@ -102,7 +98,6 @@ class SamplingDGMM(AbstractDGMM):
                         + eta @ eta.T + 2 * eta @ exp_rho.T @ lambd.T \
                         - 2 * exp_z_rho @ lambd.T + lambd @ exp_k @ lambd.T
                     pi = denom
-                    pis_sum += pi
 
                     # Make SPD. psi is diagonal, therefore it is easier
                     psi = (psi > 0) * psi + (psi <= 0) * self.SMALL_VALUE
@@ -110,13 +105,20 @@ class SamplingDGMM(AbstractDGMM):
                     psi = np.diag(np.diag(psi))
 
                     # Set the values
+                    a = 0.01
+
                     eta = eta.reshape([-1])
-                    dist.lambd, dist.eta, dist.psi, dist.pi =\
-                        lambd, eta, psi, pi
+                    dist.lambd = dist.lambd * (1 - a) + lambd * a
+                    dist.eta = dist.eta * (1 - a) + eta * a
+                    dist.psi = dist.psi * (1 - a) + psi * a
+                    dist.pi = dist.pi * (1 - a) + pi * a
+                    lambd, eta, psi, pi = dist.lambd, dist.eta, dist.psi, dist.pi
+                    pis_sum += pi
 
                     # Sample values for next layer
                     for dist_path_i in range(dist_paths_num):
                         path = dist_paths[dist_path_i]
+                        path_i = dist_path_i + dist_paths_num * dist_i
 
                         if layer_i == self.num_layers - 1:
                             mu, sigma = np.zeros(dim), np.eye(dim)
@@ -135,12 +137,14 @@ class SamplingDGMM(AbstractDGMM):
                                      + (inv(sigma) @ mu.reshape([-1, 1])))).T
 
                         # Sample from the distribution
-                        sample_means = rho[np.random.choice(len(rho), num_samples)]
+                        probs = prob_paths_given_values[path_i] # * values_probs
+                        sample_index = np.random.choice(len(rho), num_samples)
+                        sample_means = rho[sample_index]
+                        sample_probs = probs[sample_index]
                         z_sample = normal.rvs(cov=ksi, size=num_samples)\
                             .reshape([num_samples, -1]) + sample_means
                         z_in_samples.append(z_sample)
-                        z_in_samples_probs.append(
-                            np.repeat(pi / dist_paths_num / num_samples, num_samples))
+                        z_in_samples_probs.append(sample_probs)
 
                 # Rescale the pi to sum up to 1
                 for dist_i in range(len(layer)):
@@ -150,9 +154,10 @@ class SamplingDGMM(AbstractDGMM):
                 z_in_samples = np.concatenate(z_in_samples)
                 z_in_samples_probs = np.concatenate(z_in_samples_probs)
                 z_in_samples_probs /= z_in_samples_probs.sum()
-                samples_index = np.random.choice(len(z_in_samples), num_samples,
-                                                 p=z_in_samples_probs)
+                samples_index = np.random.choice(len(z_in_samples), num_samples)
+                                                 # p=z_in_samples_probs
                 values = z_in_samples[samples_index]
+                values_probs = z_in_samples_probs[samples_index]
 
         # Compute the final distributions to update distribution parameters
         #   (mu, sigma and pi)

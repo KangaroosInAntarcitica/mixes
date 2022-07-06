@@ -103,7 +103,7 @@ class AbstractDGMM:
 
             mu, sigma, pi = new_mu, new_sigma, new_pi
 
-        return mu, sigma, pi
+        return np.array(mu), np.array(sigma), np.array(pi)
 
     def compute_paths_prob_given_out_values(self, values, layer_i: int):
         """
@@ -121,6 +121,7 @@ class AbstractDGMM:
 
         # Initialize the arrays to store values in
         prob_v_and_path = []
+        prob_v_given_path = []
         for dist_i in range(len(layer)):
             # Get the values from the distribution
             mu = layer[dist_i].mu_given_path
@@ -130,17 +131,19 @@ class AbstractDGMM:
             for path_i in range(len(mu)):
                 p = normal.pdf(values, mean=mu[path_i],
                                cov=sigma[path_i], allow_singular=True)
+                prob_v_given_path.append(p)
                 prob_v_and_path.append(p * pi[path_i])
 
+        prob_v_given_path = np.array(prob_v_given_path)
         prob_v_and_path = np.array(prob_v_and_path)
         prob_v = np.sum(prob_v_and_path, 0)
         # Use the Bayes formula p(path|v) = p(v,path) / p(v)
         prob_path_given_v = prob_v_and_path / (prob_v + self.SMALL_VALUE)
 
-        return prob_v, prob_path_given_v
+        return prob_v, prob_path_given_v, prob_v_given_path, prob_v_and_path
 
     def predict_path_probs(self, data):
-        prob_v, prob_path_given_v = \
+        prob_v, prob_path_given_v, _, _ = \
             self.compute_paths_prob_given_out_values(data, 0)
         n_clusters = self.layer_sizes[0]
         prob_dist_given_v = prob_path_given_v \
@@ -338,6 +341,7 @@ class AbstractDGMM:
                 draw_distribution(dist.mu_given_path[path_i],
                                   dist.sigma_given_path[path_i],
                                   self.ax[1], color)
+                break
         self.ax[1].set_xlim(self.ax[0].get_xlim())
         self.ax[1].set_ylim(self.ax[0].get_ylim())
         self.ax[1].set_aspect('equal', 'box')

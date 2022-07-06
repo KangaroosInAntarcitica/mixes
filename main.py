@@ -2,6 +2,7 @@ import numpy as np
 from scipy.stats import multivariate_normal as normal
 import matplotlib.pyplot as plt
 from dgmm import SamplingDGMM as DGMM
+from dgmm import GradientDescentDGMM as GDGMM
 from dgmm import GMM
 from sklearn import metrics, preprocessing, datasets
 from sklearn.cluster import KMeans
@@ -25,7 +26,7 @@ def create_evaluator(data, labels):
         ari = metrics.adjusted_rand_score(labels, clusters)
 
         print("Iter %3d: (sil: %.3f / %.3f, acc: %.3f, ARI: %.3f, log_lik: %.5f)" %\
-              (iter_i + 1, silhouette, silhouette_real, acc, ari, log_lik))
+              (iter_i, silhouette, silhouette_real, acc, ari, log_lik))
 
     return evaluator
 
@@ -105,12 +106,36 @@ def manual_dataset_2():
     return data, labels
 
 
-def try_manual(algorithm='dgmm'):
-    data, labels = manual_dataset_2()
+def try_random(algorithm='dgmm', ndims=2, nclust=6, size=1000):
+    data = []
+    labels = []
+
+    for i in range(nclust):
+        cov = GMM.make_spd(np.random.random([ndims, ndims]))
+        clust_size = int(size / nclust)
+        distrib = normal(np.random.random(ndims), cov)
+        data.append(distrib.rvs(clust_size))
+        labels.append(np.repeat(i, clust_size))
+
+    data = np.concatenate(data)
+    labels = np.concatenate(labels)
+
     if algorithm == 'dgmm':
         alg = DGMM([2], [3], init='kmeans', plot_predictions=1,
                    plot_wait_for_input=True,
                    num_iter=100, num_samples=5000,
+                   evaluator=create_evaluator(data, labels))
+
+    test_on_data(alg, data, labels, rescale=False)
+
+
+def try_manual(algorithm='dgmm'):
+    data, labels = manual_dataset_2()
+    if algorithm == 'dgmm':
+        alg = DGMM([2, 2], [2, 1], init='kmeans', plot_predictions=10,
+                   plot_wait_for_input=False,
+                   num_iter=100,
+                   step_size=0.1,
                    evaluator=create_evaluator(data, labels))
     elif algorithm == 'gmm':
         alg = GMM(2, init='random', plot_predictions=1, num_iter=40,
@@ -125,24 +150,38 @@ def try_manual(algorithm='dgmm'):
 def try_ecoli():
     data, labels = load_ecoli()
     # alg = KMeans(3, max_iter=100, n_init=30)
-    alg = DGMM([7, 4, 3, 2], [4, 2, 2, 2], init='kmeans', plot_predictions=20,
+
+    # Remove very correlated values
+    # cor = np.corrcoef(data)
+    # indexes = np.ones(data.shape[1])
+    # for i in range(data.shape[1]):
+    #     for j in range(i + 1, data.shape[1]):
+    #         if cor[i, j] > 0.9:
+    #             indexes[j] = 0
+    # data = data[:, indexes.astype('bool')]
+
+    alg = DGMM([7, 6, 3], [6, 2, 1], init='kmeans', plot_predictions=10,
+               plot_wait_for_input=False,
                num_iter=100, num_samples=1000,
+               evaluator=create_evaluator(data, labels))
+    # alg = GMM(7, 7, init='kmeans', plot_predictions=False, num_iter=40)
+
+    test_on_data(alg, data, labels, rescale=True)
+
+
+def try_wine():
+    data, labels = datasets.load_wine(return_X_y=True)
+    # 3 clusters, 13 dims
+    alg = DGMM([3, 2], [12, 11], init='kmeans', plot_predictions=10,
+               num_iter=1000,
+               # step_size=0.001,
                evaluator=create_evaluator(data, labels))
     # alg = GMM(7, 7, init='kmeans', plot_predictions=False, num_iter=40)
 
     test_on_data(alg, data, labels)
 
 
-def try_wine():
-    data, labels = datasets.load_wine(return_X_y=True)
-    alg = DGMM([3, 3, 3], [6, 4, 2], init='kmeans', plot_predictions=20,
-               num_iter=100)
-    # alg = GMM(7, 7, init='kmeans', plot_predictions=False, num_iter=40)
-
-    test_on_data(alg, data, labels)
-
-
 if __name__ == "__main__":
-    try_manual()
-    # try_ecoli()
+    # try_manual()
+    try_ecoli()
     # try_wine()
