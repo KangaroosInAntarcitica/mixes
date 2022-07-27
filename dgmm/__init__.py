@@ -3,4 +3,8 @@ from .SelosseDGMM import SelosseDGMM
 from .CinziaDGMM import CinziaDGMM
 from .SamplingDGMM import SamplingDGMM
 from .GradientDescentDGMM import GradientDescentDGMM
+from .GDGMM import GDGMM
 from .GMM import GMM
+from .GMN import GMN
+from .Evaluator import Evaluator
+from .SkewGMM import SkewGMM

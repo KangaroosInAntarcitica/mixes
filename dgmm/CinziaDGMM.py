@@ -4,10 +4,9 @@ from .AbstractDGMM import *
 class CinziaDGMM(AbstractDGMM):
     SMALL_VALUE = 1e-20
 
-    # TODO use this method instead of compute_likelihood()
     def compute_dists_prob_given_y(self, data):
         self.compute_path_distributions()
-        _, prob_path_given_y, _, _ = self.compute_paths_prob_given_out_values(data, 0)
+        _, prob_path_given_y, _ = self.compute_paths_prob_given_out_values(data, 0)
 
         for layer_i in range(len(self.layer_sizes)):
             for dist_i in range(self.layer_sizes[layer_i]):
@@ -20,41 +19,6 @@ class CinziaDGMM(AbstractDGMM):
 
         return prob_path_given_y
 
-    def compute_likelihood(self, data):
-        mu, sigma, pi = self.compute_path_distributions()
-
-        # Initialize and fill the variables
-        log_prob_y_given_path = []
-        log_prob_y_and_path = []
-        for path_i in range(len(self.paths)):
-            log_p_y_path = normal.logpdf(
-                data, mean=mu[path_i], cov=sigma[path_i], allow_singular=True)
-            log_prob_y_given_path.append(log_p_y_path)
-            log_prob_y_and_path.append(np.log(pi[path_i]) + log_p_y_path)
-
-        # Size [n_paths, len(data)]
-        log_prob_y_and_path = np.array(log_prob_y_and_path)
-        log_prob_y_given_path = np.array(log_prob_y_given_path)
-
-        # Rescale the variables for numerical stability
-        log_prob_y_and_path_max = np.max(log_prob_y_and_path, axis=0)
-        log_prob_y_and_path -= log_prob_y_and_path_max
-        prob_y_and_path = np.exp(log_prob_y_and_path)
-        prob_y = np.sum(prob_y_and_path, axis=0)
-        prob_path_given_y = prob_y_and_path / prob_y
-        prob_y *= np.exp(log_prob_y_and_path_max)
-
-        for layer_i in range(len(self.layer_sizes)):
-            for dist_i in range(self.layer_sizes[layer_i]):
-                # Sum over all the combinations where this distribution is
-                #   present to calculate the probability that path goes through
-                #   this distribution
-                index = self.paths[:, layer_i] == dist_i
-                dist = self.layers[layer_i][dist_i]
-                dist.prob_theta_given_y = prob_path_given_y[index].sum(axis=0)
-
-        return prob_y, prob_y_and_path, prob_path_given_y
-
     def fit(self, data):
         def inv(M):
             u, s, vh = np.linalg.svd(M)
@@ -66,7 +30,7 @@ class CinziaDGMM(AbstractDGMM):
             else:
                 return vh[:, pos] @ (1 / s[pos] * u[:, pos]).T
 
-        # inv = np.linalg.pinv
+        inv = np.linalg.pinv
 
         num_samples = len(data)
         self.out_dims[0] = data.shape[1]
@@ -74,7 +38,7 @@ class CinziaDGMM(AbstractDGMM):
         self._init_params(data)
 
         for iter_i in range(self.num_iter):
-            self.compute_likelihood(data)
+            self.compute_dists_prob_given_y(data)
             self.evaluate(data, iter_i)
 
             # Initialize the variables
@@ -116,8 +80,6 @@ class CinziaDGMM(AbstractDGMM):
 
                     # Estimate the parameters of the p(z[k+1] | z[k]) distribution
                     psi_inv = np.diag(1 / np.diag(psi))
-                    psi_inv = psi_inv * (psi_inv <= 1000) + \
-                              1 * (psi_inv > 1000)
                     ksi = inv(inv(sigma) + lambd.T @ psi_inv @ lambd)
                     # Shape [num_samples, dim[l-1]]
                     rho = (ksi @ (lambd.T @ psi_inv @ (values - eta).T
@@ -185,6 +147,41 @@ class CinziaDGMM(AbstractDGMM):
                 values = exp_sample_given_z
 
         # Compute the final likelihood to update the dist.prob_theta_give_y
-        self.compute_likelihood(data)
+        self.compute_dists_prob_given_y(data)
         self.evaluate(data, self.num_iter)
         return self.predict(data)
+
+    def compute_likelihood(self, data):
+        mu, sigma, pi = self.compute_path_distributions()
+
+        # Initialize and fill the variables
+        log_prob_y_given_path = []
+        log_prob_y_and_path = []
+        for path_i in range(len(self.paths)):
+            log_p_y_path = normal.logpdf(
+                data, mean=mu[path_i], cov=sigma[path_i], allow_singular=True)
+            log_prob_y_given_path.append(log_p_y_path)
+            log_prob_y_and_path.append(np.log(pi[path_i]) + log_p_y_path)
+
+        # Size [n_paths, len(data)]
+        log_prob_y_and_path = np.array(log_prob_y_and_path)
+        log_prob_y_given_path = np.array(log_prob_y_given_path)
+
+        # Rescale the variables for numerical stability
+        log_prob_y_and_path_max = np.max(log_prob_y_and_path, axis=0)
+        log_prob_y_and_path -= log_prob_y_and_path_max
+        prob_y_and_path = np.exp(log_prob_y_and_path)
+        prob_y = np.sum(prob_y_and_path, axis=0)
+        prob_path_given_y = prob_y_and_path / prob_y
+        prob_y *= np.exp(log_prob_y_and_path_max)
+
+        for layer_i in range(len(self.layer_sizes)):
+            for dist_i in range(self.layer_sizes[layer_i]):
+                # Sum over all the combinations where this distribution is
+                #   present to calculate the probability that path goes through
+                #   this distribution
+                index = self.paths[:, layer_i] == dist_i
+                dist = self.layers[layer_i][dist_i]
+                dist.prob_theta_given_y = prob_path_given_y[index].sum(axis=0)
+
+        return prob_y, prob_y_and_path, prob_path_given_y

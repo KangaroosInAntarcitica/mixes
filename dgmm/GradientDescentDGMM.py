@@ -17,8 +17,10 @@ class GradientDescentDGMM(AbstractDGMM):
             mu, sigma, pi = self.compute_path_distributions()
             self.evaluate(data, iter_i)
 
-            _, prob_path_given_v, prob_v_given_paths, prob_v_and_path = \
-                self.compute_paths_prob_given_out_values(data, 0)
+            sample = data[np.random.choice(len(data), self.num_samples,
+                                           replace=False)]
+            _, prob_path_given_v, prob_v_and_path = \
+                self.compute_paths_prob_given_out_values(sample, 0)
 
             dmu = []
             dsigma = []
@@ -31,17 +33,19 @@ class GradientDescentDGMM(AbstractDGMM):
                 sigma_inv = inv(sigma_i + np.eye(len(sigma_i)) * 0.0001)
 
                 probs = prob_path_given_v[path_i].reshape([-1, 1])
-                denom = probs.sum() + self.SMALL_VALUE
-                dmu.append((sigma_inv @ (np.sum(data * probs, axis=0) / denom - mu_i)
+                # The probs should not be scaled the same way for all paths
+                #   therefore denom is just the number of samples
+                denom = len(sample) # probs.sum() + self.SMALL_VALUE
+                dmu.append((sigma_inv @ (np.sum(sample * probs, axis=0) / denom - mu_i)
                             .reshape([-1, 1])).reshape([-1]))
                 dsigma.append(0.5 * (-sigma_inv +
-                    np.sum([sigma_inv @ (data[i:i+1] - mu_i).T @
-                            (data[i:i+1] - mu_i) @ sigma_inv * probs[i]
-                            for i in range(len(data))], axis=0) / denom))
+                    np.sum([sigma_inv @ (sample[i:i+1] - mu_i).T @
+                            (sample[i:i+1] - mu_i) @ sigma_inv * probs[i]
+                            for i in range(len(sample))], axis=0) / denom))
                 dpi.append(-0.5 / pi[path_i])
 
-            # dmu, dsigma, dpi = \
-            #     np.array(dmu).clip(1), np.array(dsigma).clip(1), np.array(dpi).clip(1)
+            dmu, dsigma, dpi = \
+                np.array(dmu), np.array(dsigma), np.array(dpi)
 
             for layer_i in range(self.num_layers):
                 n_dist_paths = math.prod(self.layer_sizes[layer_i + 1:])
@@ -71,8 +75,8 @@ class GradientDescentDGMM(AbstractDGMM):
                             s = self.layers[layer_i + 1]\
                                 [dist_path_i // next_dist_paths]\
                                 .sigma_given_path[dist_path_i % next_dist_paths]
-                        right = dist.lambd @ s
-                        dlambd += 2 * dsigma[paths_index].sum(axis=0) @ right
+                        right = 2 * dist.lambd @ s
+                        dlambd += dsigma[paths_index].sum(axis=0) @ right
 
                     # Calculate the derivatives for the next layer
                     dmu_new += dmu[paths_index] @ dist.lambd
@@ -83,22 +87,26 @@ class GradientDescentDGMM(AbstractDGMM):
                         math.prod(self.layer_sizes[layer_i+1:]) /
                         math.prod(self.layer_sizes[:layer_i]))
 
+                    sqrt_psi = np.sqrt(dist.psi)
+                    d_sqrt_psi = 2 * dpsi * sqrt_psi
+                    sqrt_psi += d_sqrt_psi * step_size
+                    dist.psi = sqrt_psi ** 2
+
                     # Perform the gradient step
                     dist.lambd += dlambd * step_size
                     dist.eta += deta * step_size
-                    dist.psi += dpsi * step_size
-                    dist.psi = (dist.psi > 0) * dist.psi + \
-                               (dist.psi <= 0) * 0.0001
+                    # dist.psi += dpsi * step_size
+                    # dist.psi = (dist.psi > 0) * dist.psi + \
+                    #            (dist.psi <= 0) * 0.0001
                     dist.pi += dp * step_size
                     pis_sum += dist.pi
 
                     # dist.lambd /= np.apply_along_axis(np.linalg.norm, 0, dist.lambd)
-
                     print("\t %d:%d, lambd = %.3f, eta = %.3f, psi = %.3f, pi = %.3f" %
                           (layer_i ,dist_i,
                            dlambd.mean() * step_size,
                            deta.mean() * step_size,
-                           dpsi.mean() * step_size,
+                           d_sqrt_psi.mean() * step_size,
                            dp.mean() * step_size))
 
                 # Rescale the pis

@@ -1,49 +1,33 @@
 import numpy as np
 from scipy.stats import multivariate_normal as normal
+from scipy.stats import skewnorm as skew_normal
 import matplotlib.pyplot as plt
-from dgmm import SamplingDGMM as DGMM
+from dgmm import SamplingDGMM as DGMM, SkewGMM
 from dgmm import GradientDescentDGMM as GDGMM
 from dgmm import GMM
-from sklearn import metrics, preprocessing, datasets
+from dgmm import GMN
 from sklearn.cluster import KMeans
+from sklearn.mixture import GaussianMixture
 import pandas as pd
-from itertools import permutations
-
-
-def accuracy(labels, pred):
-    m = metrics.confusion_matrix(labels, pred)
-    i = [*permutations(np.arange(m.shape[1]))]
-    all_perm = m[np.arange(m.shape[0]), i]
-    return np.max(np.sum(all_perm, 1)) / len(labels)
-
-
-def create_evaluator(data, labels):
-    silhouette_real = metrics.silhouette_score(data, labels)
-
-    def evaluator(iter_i, probs, clusters, log_lik):
-        silhouette = metrics.silhouette_score(data, clusters)
-        acc = accuracy(labels, clusters)
-        ari = metrics.adjusted_rand_score(labels, clusters)
-
-        print("Iter %3d: (sil: %.3f / %.3f, acc: %.3f, ARI: %.3f, log_lik: %.5f)" %\
-              (iter_i, silhouette, silhouette_real, acc, ari, log_lik))
-
-    return evaluator
+from sklearn import preprocessing, datasets, metrics
+from dgmm import Evaluator
 
 
 def test_on_data(alg, data, labels, rescale=True):
     if rescale:
         data = preprocessing.scale(data)
 
+    print("Testing on data. Num classes = %d, num rows = %d"
+          % (len(np.unique(labels)), len(data)))
+
     if hasattr(alg, "fit_predict"):
-        alg.fit_predict(data)
-        clust = alg.labels_
+        clust = alg.fit_predict(data)
     else:
         clust = alg.fit(data)
 
     print()
     print("Silhouette score = ", metrics.silhouette_score(data, labels))
-    print("Accuracy = ", accuracy(labels, clust))
+    print("Accuracy = ", Evaluator.accuracy(labels, clust))
     print("ARI = ", metrics.adjusted_rand_score(labels, clust))
 
     try:
@@ -119,35 +103,42 @@ def try_random(algorithm='dgmm', ndims=2, nclust=6, size=1000):
 
     data = np.concatenate(data)
     labels = np.concatenate(labels)
+    evaluator = Evaluator(data, labels, 'silhouette', 'accuracy', 'ARI')
 
     if algorithm == 'dgmm':
         alg = DGMM([2], [3], init='kmeans', plot_predictions=1,
                    plot_wait_for_input=True,
                    num_iter=100, num_samples=5000,
-                   evaluator=create_evaluator(data, labels))
+                   evaluator=evaluator)
 
     test_on_data(alg, data, labels, rescale=False)
 
 
 def try_manual(algorithm='dgmm'):
     data, labels = manual_dataset_2()
+    evaluator = Evaluator(data, labels, 'silhouette', 'accuracy', 'ARI')
+
     if algorithm == 'dgmm':
         alg = DGMM([2, 2], [2, 1], init='kmeans', plot_predictions=10,
                    plot_wait_for_input=False,
                    num_iter=100,
-                   step_size=0.1,
-                   evaluator=create_evaluator(data, labels))
+                   evaluator=evaluator)
+    elif algorithm == 'gdgmm':
+        alg = GDGMM([2, 2], [2, 1], init='kmeans', plot_predictions=10,
+                   plot_wait_for_input=False,
+                   num_iter=100, step_size=1e-2, num_samples=100,
+                   evaluator=evaluator)
     elif algorithm == 'gmm':
         alg = GMM(2, init='random', plot_predictions=1, num_iter=40,
                   plot_wait_for_input=True,
-                  evaluator=create_evaluator(data, labels))
+                  evaluator=evaluator)
     elif algorithm == 'kmeans':
         alg = KMeans(3, max_iter=100, n_init=30)
 
     test_on_data(alg, data, labels, rescale=False)
 
 
-def try_ecoli():
+def try_ecoli(algorithm='dgmm'):
     data, labels = load_ecoli()
     # alg = KMeans(3, max_iter=100, n_init=30)
 
@@ -160,28 +151,92 @@ def try_ecoli():
     #             indexes[j] = 0
     # data = data[:, indexes.astype('bool')]
 
-    alg = DGMM([7, 6, 3], [6, 2, 1], init='kmeans', plot_predictions=10,
-               plot_wait_for_input=False,
-               num_iter=100, num_samples=1000,
-               evaluator=create_evaluator(data, labels))
+    layer_sizes = [7, 4, 3]
+    dims = [6, 4, 3]
+    evaluator = Evaluator(data, labels, 'silhouette', 'accuracy', 'ARI')
+
+    if algorithm == 'gmm':
+        alg = GMM(7, use_annealing=True, annealing_start_v=0.2,
+                  plot_predictions=0, init='random',
+                  num_iter=100, update_rate=1,
+                  evaluator=evaluator)
+    elif algorithm == 'dgmm':
+        alg = DGMM(layer_sizes, dims, init='kmeans', plot_predictions=10,
+                   num_iter=100, num_samples=100,
+                   update_rate=1e-4,
+                   stopping_thresh=1e-4,
+                   use_annealing=True, annealing_start_v=0.01,
+                   evaluator=evaluator)
+    elif algorithm == 'gmn':
+        layer_sizes = [7, 12, 3]
+        dims = [6, 4, 3]
+        alg = GMN(layer_sizes, dims, init='kmeans',
+                  plot_predictions=10,
+                  update_rate=1e-4, stopping_thresh=0,
+                  use_annealing=True, annealing_start_v=0.01,
+                  num_iter=100, evaluator=evaluator)
+    elif algorithm == 'gdgmm':
+        alg = GDGMM([7, 6, 3], [6, 2, 1], init='kmeans', plot_predictions=10,
+                    num_iter=100, step_size=0.01,
+                    evaluator=evaluator)
+    else:
+        raise ValueError("Algorithm not supported")
     # alg = GMM(7, 7, init='kmeans', plot_predictions=False, num_iter=40)
 
     test_on_data(alg, data, labels, rescale=True)
 
 
-def try_wine():
+def try_wine(algorithm='dgmm'):
     data, labels = datasets.load_wine(return_X_y=True)
     # 3 clusters, 13 dims
-    alg = DGMM([3, 2], [12, 11], init='kmeans', plot_predictions=10,
-               num_iter=1000,
-               # step_size=0.001,
-               evaluator=create_evaluator(data, labels))
+    evaluator = Evaluator(data, labels, 'silhouette', 'accuracy', 'ARI')
+
+    if algorithm == 'kmeans':
+        alg = KMeans(3)
+    if algorithm == 'gmm':
+        alg = GMM(3, init='kmeans', plot_predictions=False, num_iter=100,
+                  evaluator=evaluator)
+        # alg = GaussianMixture(3)
+    elif algorithm == 'dgmm':
+        alg = DGMM([3, 3, 3, 2], [10, 8, 5, 2], init='kmeans', plot_predictions=10,
+                   num_iter=200, num_samples=1000,
+                   update_rate=0.1,
+                   stopping_thresh=1e-4,
+                   use_annealing=True, annealing_start_v=0.01,
+                   evaluator=evaluator)
+
+    test_on_data(alg, data, labels)
+
+
+def try_olive(algorithm='dgmm'):
+    data = pd.read_csv('data/olive.csv')
+    # 3 areas, 8 regions, 8 dims
+    area, region = data.area, data.region
+    labels = area.values
+    data = data.iloc[:, 2:].values
+    evaluator = Evaluator(data, labels, 'silhouette', 'accuracy', 'ARI')
+
+    if algorithm == 'dgmm':
+        alg = DGMM([3, 3, 3], [7, 6, 5], init='kmeans', plot_predictions=10,
+                   num_iter=100,
+                   num_samples=100,
+                   use_annealing=True, annealing_start_v=0.1,
+                   evaluator=evaluator)
+    elif algorithm == 'gdgmm':
+        alg = GDGMM([3, 2, 1], [7, 6, 5], init='kmeans', plot_predictions=10,
+                    num_iter=1000, step_size=1e-5, num_samples=100,
+                    evaluator=evaluator)
+    else:
+        raise ValueError("Algorithm not supported")
     # alg = GMM(7, 7, init='kmeans', plot_predictions=False, num_iter=40)
 
     test_on_data(alg, data, labels)
 
 
 if __name__ == "__main__":
-    # try_manual()
-    try_ecoli()
-    # try_wine()
+    # algorithm = 'gmm'
+    # try_manual(algorithm)
+    # try_ecoli(algorithm)
+    # try_wine(algorithm)
+    # try_olive(algorithm)
+    pass

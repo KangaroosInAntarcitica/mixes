@@ -8,11 +8,10 @@ class SamplingDGMM(AbstractDGMM):
         self.out_dims[0] = data.shape[1]
 
         self._init_params(data)
+        self.compute_path_distributions()
+        self.evaluate(data, 0)
 
         for iter_i in range(self.num_iter):
-            self.compute_path_distributions()
-            self.evaluate(data, iter_i)
-
             # Initialize the variables
             # Shape [num_samples, dim[layer_i - 1]]
             values = data
@@ -24,8 +23,9 @@ class SamplingDGMM(AbstractDGMM):
                 dim = self.in_dims[layer_i]
                 dim_out = self.out_dims[layer_i]
 
-                _, prob_paths_given_values, _, _ = \
-                    self.compute_paths_prob_given_out_values(values, layer_i)
+                _, prob_paths_given_values, _ = \
+                    self.compute_paths_prob_given_out_values(values, layer_i,
+                        annealing_value=self.annealing_v)
 
                 # sampled z for next layer
                 z_in_samples = []
@@ -39,14 +39,18 @@ class SamplingDGMM(AbstractDGMM):
                     dist = layer[dist_i]
                     lambd, psi, eta, pi = dist.lambd, dist.psi, dist.eta, dist.pi
 
+                    # As in the paper we use
+                    #   v = z[layer_i]
+                    #   w = z[layer_i + 1]
                     # Initialize the values for estimated parameters:
-                    #   E(z), E(z @ z.T)
-                    #   E(z^{+1}), E(z^{+1} @ z^{+1}.T)
-                    #   E(z @ z^{+1}.T)
+                    #   E(v), E(v @ v.T), E(w), E(w @ w.T), E(v @ w.T)
                     denom = 0
-                    exp_z, exp_zz = np.zeros([dim_out, 1]), np.zeros([dim_out, dim_out])
-                    exp_rho, exp_k = np.zeros([dim, 1]), np.zeros([dim, dim])
-                    exp_z_rho = np.zeros([dim_out, dim])
+                    exp_v, exp_vv = np.zeros([dim_out, 1]), np.zeros([dim_out, dim_out])
+                    exp_w, exp_ww = np.zeros([dim, 1]), np.zeros([dim, dim])
+                    exp_vw = np.zeros([dim_out, dim])
+
+                    # TODO remove
+                    # log_lik_i = 0
 
                     for dist_path_i in range(dist_paths_num):
                         path_i = dist_path_i + dist_paths_num * dist_i
@@ -72,48 +76,63 @@ class SamplingDGMM(AbstractDGMM):
                         #   up to the global estimates
                         probs = prob_paths_given_values[path_i].reshape([-1, 1]) # * values_probs
                         denom += probs.sum()
-                        exp_z += (values * probs).sum(axis=0).reshape([-1, 1])
-                        exp_zz += (values * probs).T @ values
-                        exp_rho += (rho * probs).sum(axis=0).reshape([-1, 1])
-                        exp_z_rho += (values * probs).T @ rho
+                        exp_v += (values * probs).sum(axis=0).reshape([-1, 1])
+                        exp_vv += (values * probs).T @ values
+                        exp_w += (rho * probs).sum(axis=0).reshape([-1, 1])
+                        exp_vw += (values * probs).T @ rho
                         # E(z @ z.T|s) = Var(z|s) + E^2(z|s)
-                        exp_k += ksi * probs.sum() + (rho * probs).T @ rho
+                        exp_ww += ksi * probs.sum() + (rho * probs).T @ rho
+
+                        # TODO remove
+                        # v = values - eta - (lambd @ rho.T).T
+                        # log_lik_i += -0.5 * (
+                        #         np.log(2 * np.pi) * probs.sum() +
+                        #         np.log(np.linalg.det(psi)) * probs.sum() +
+                        #         np.sum([v[i:i + 1] @ np.linalg.pinv(psi) @ v[
+                        #                                                    i:i + 1].T *
+                        #                 probs[i] for i in range(len(v))])
+                        # )
 
                     # Rescale the variables
-                    exp_z /= denom
-                    exp_zz /= denom
-                    exp_rho /= denom
-                    exp_z_rho /= denom
-                    exp_k /= denom
+                    exp_v /= denom
+                    exp_vv /= denom
+                    exp_w /= denom
+                    exp_vw /= denom
+                    exp_ww /= denom
 
                     # Estimate the parameters
-                    lambd = (exp_z_rho - exp_z @ exp_rho.T) @ \
-                            inv(exp_rho @ exp_rho.T - exp_k)
-                    # TODO remove - dividing by each columns norm
-                    # f = np.vectorize(lambda x: np.inf if x == 0 else x)
-                    # lambd /= f(np.apply_along_axis(np.linalg.norm, 0, lambd)
-                    #            .reshape([-1, 1]))
-                    eta = exp_z - lambd @ exp_rho
-                    psi = exp_zz - 2 * exp_z @ eta.T \
-                        + eta @ eta.T + 2 * eta @ exp_rho.T @ lambd.T \
-                        - 2 * exp_z_rho @ lambd.T + lambd @ exp_k @ lambd.T
+                    lambd = (exp_vw - exp_v @ exp_w.T) @ \
+                            inv(exp_w @ exp_w.T - exp_ww)
+                    eta = exp_v - lambd @ exp_w
+                    # psi = exp_vv - 2 * exp_v @ eta.T \
+                    #     + eta @ eta.T + 2 * eta @ exp_w.T @ lambd.T \
+                    #     - 2 * exp_vw @ lambd.T + lambd @ exp_ww @ lambd.T
+                    psi = exp_vv - 2 * exp_vw @ lambd.T + \
+                          lambd @ exp_ww @ lambd.T - eta @ eta.T
                     pi = denom
+
+                    # Reshape eta to its original form
+                    eta = eta.reshape([-1])
 
                     # Make SPD. psi is diagonal, therefore it is easier
                     psi = (psi > 0) * psi + (psi <= 0) * self.SMALL_VALUE
                     # Make psi diagonal (this is a constraint we defined)
                     psi = np.diag(np.diag(psi))
 
-                    # Set the values
-                    a = 0.01
+                    # Perform the update
+                    rate = self.update_rate
+                    lambd = dist.lambd * (1 - rate) + lambd * rate
+                    eta = dist.eta * (1 - rate) + eta * rate
+                    psi = dist.psi * (1 - rate) + psi * rate
+                    pi = dist.pi * (1 - rate) + pi * rate
 
-                    eta = eta.reshape([-1])
-                    dist.lambd = dist.lambd * (1 - a) + lambd * a
-                    dist.eta = dist.eta * (1 - a) + eta * a
-                    dist.psi = dist.psi * (1 - a) + psi * a
-                    dist.pi = dist.pi * (1 - a) + pi * a
-                    lambd, eta, psi, pi = dist.lambd, dist.eta, dist.psi, dist.pi
+                    # Set the values
+                    dist.lambd, dist.eta, dist.psi, dist.pi =\
+                            lambd, eta, psi, pi
                     pis_sum += pi
+
+                    # TODO remove
+                    # log_lik_i = 0
 
                     # Sample values for next layer
                     for dist_path_i in range(dist_paths_num):
@@ -146,6 +165,17 @@ class SamplingDGMM(AbstractDGMM):
                         z_in_samples.append(z_sample)
                         z_in_samples_probs.append(sample_probs)
 
+                        # TODO remove
+                    #     v = values - eta - (lambd @ rho.T).T
+                    #     log_lik_i += -0.5 * (
+                    #             np.log(2 * np.pi) * probs.sum() +
+                    #             np.log(np.linalg.det(psi)) * probs.sum() +
+                    #             np.sum([v[i:i + 1] @ np.linalg.pinv(psi) @ v[i:i + 1].T * probs[i] for i in range(len(v))])
+                    #     )
+                    #
+                    # # TODO remove
+                    # print("  Log lik %d:%d = %.5f" % (layer_i, dist_i, log_lik_i))
+
                 # Rescale the pi to sum up to 1
                 for dist_i in range(len(layer)):
                     layer[dist_i].pi /= pis_sum
@@ -154,13 +184,19 @@ class SamplingDGMM(AbstractDGMM):
                 z_in_samples = np.concatenate(z_in_samples)
                 z_in_samples_probs = np.concatenate(z_in_samples_probs)
                 z_in_samples_probs /= z_in_samples_probs.sum()
-                samples_index = np.random.choice(len(z_in_samples), num_samples)
-                                                 # p=z_in_samples_probs
+                samples_index = np.random.choice(len(z_in_samples), num_samples,
+                                                 p=z_in_samples_probs)
                 values = z_in_samples[samples_index]
                 values_probs = z_in_samples_probs[samples_index]
 
-        # Compute the final distributions to update distribution parameters
-        #   (mu, sigma and pi)
-        self.compute_path_distributions()
-        self.evaluate(data, self.num_iter)
+            # Finish iteration
+            if self.use_annealing:
+                self.annealing_v += self.annealing_step
+                self.annealing_v = np.clip(self.annealing_v, 0, 1)
+
+            self.compute_path_distributions()
+            stopping_criterion_reached = self.evaluate(data, iter_i + 1)
+            if stopping_criterion_reached:
+                break
+
         return self.predict(data)
