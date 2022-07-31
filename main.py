@@ -2,15 +2,15 @@ import numpy as np
 from scipy.stats import multivariate_normal as normal
 from scipy.stats import skewnorm as skew_normal
 import matplotlib.pyplot as plt
-from dgmm import SamplingDGMM as DGMM, SkewGMM
-from dgmm import GradientDescentDGMM as GDGMM
-from dgmm import GMM
-from dgmm import GMN
+from mixes import SamplingDGMM as DGMM, SkewGMM
+from mixes import GradientDescentDGMM as GDGMM
+from mixes import GMM
+from mixes import GMN
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 import pandas as pd
 from sklearn import preprocessing, datasets, metrics
-from dgmm import Evaluator
+from mixes import Evaluator
 
 
 def test_on_data(alg, data, labels, rescale=True):
@@ -157,7 +157,8 @@ def try_ecoli(algorithm='dgmm'):
 
     if algorithm == 'gmm':
         alg = GMM(7, use_annealing=True, annealing_start_v=0.2,
-                  plot_predictions=0, init='random',
+                  plot_predictions=1, plot_wait_for_input=True,
+                  init='random',
                   num_iter=100, update_rate=1,
                   evaluator=evaluator)
     elif algorithm == 'dgmm':
@@ -234,9 +235,9 @@ def try_olive(algorithm='dgmm'):
 
 
 if __name__ == "__main__":
-    # algorithm = 'gmm'
+    algorithm = 'gmm'
     # try_manual(algorithm)
-    # try_ecoli(algorithm)
+    try_ecoli(algorithm)
     # try_wine(algorithm)
     # try_olive(algorithm)
     pass

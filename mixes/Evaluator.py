@@ -19,7 +19,8 @@ class Evaluator:
         'RI': lambda data, labels, pred, probs: metrics.rand_score(labels, pred)
     }
 
-    def __init__(self, data, labels=None, *metrics, show_log_lik=True):
+    def __init__(self, data, labels=None, *metrics, show_log_lik=True,
+                 print_metrics=True):
         self.show_log_lik = show_log_lik
         self.metrics = {}
 
@@ -38,6 +39,8 @@ class Evaluator:
             self.values['log_lik'] = []
         self.values['iter'] = []
 
+        self.print_metrics = print_metrics
+
     def __call__(self, iter_i, probs, pred, log_lik):
         m = []
 
@@ -52,9 +55,18 @@ class Evaluator:
             m.append("%s: %.5f" % (metric, value))
             self.values[metric].append(value)
 
-        text = ", ".join(m)
-        text = "Iter %3d (%s)" % (iter_i, text)
-        print(text)
+        if self.print_metrics:
+            text = ", ".join(m)
+            text = "Iter %3d (%s)" % (iter_i, text)
+            print(text)
+
+    def get(self, key):
+        if key not in self.values:
+            raise KeyError("There is no metric '%s' collected" % key)
+        if len(self.values[key]) < 1:
+            raise RuntimeError("Evaluator has not collected any metrics")
+
+        return self.values[key][-1]
 
     def get_values(self):
         return self.values

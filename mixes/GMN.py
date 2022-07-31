@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.patches
 import matplotlib
-matplotlib.use("TkAgg")
-from .AbstractDGMM import *
+import seaborn as sns
+from .AbstractDGMM import AbstractDGMM
 
 from .GaussianDistrib import GaussianDistrib
 
@@ -14,7 +14,7 @@ from .GaussianDistrib import GaussianDistrib
 class GMN:
     SMALL_VALUE = 1e-20
 
-    def __init__(self, layer_sizes, dims, plot_predictions=True,
+    def __init__(self, layer_sizes, dims, plot_evaluations=False,
                  plot_wait_for_input=False,
                  init='kmeans', num_iter=10, num_samples=500,
                  use_annealing=False, annealing_start_v=0.1,
@@ -42,8 +42,9 @@ class GMN:
 
         # Display and computation parameters
         self.plot_wait_for_intput = plot_wait_for_input
-        self.plot_predictions = int(plot_predictions)
-        if self.plot_predictions:
+        self.plot_evaluations = int(plot_evaluations)
+        if self.plot_evaluations:
+            matplotlib.use("TkAgg")
             plt.ion()
             self.fig, self.ax = plt.subplots(2, 1)
             self.ax[0].set_title("Predictions plot")
@@ -302,6 +303,77 @@ class GMN:
                 return True
         return False
 
+    def plot_predictions(self, data, probs=None, ax=None):
+        if ax is not None:
+            plt.sca(ax)
+        if probs is None:
+            _, probs, _ = self.predict_path_probs(data)
+
+        colors = cm.rainbow(np.linspace(0, 1, probs.shape[0]))
+
+        # Draw the predictions plot
+        data_colors = np.clip(probs.T @ colors, 0, 1)
+        plt.scatter(data[:, 0], data[:, 1], color=data_colors, s=10)
+        plt.gca().set_aspect('equal', 'box')
+        plt.gca().set_title("Probabilities")
+
+    def plot_distributions(self, data, probs=None, ax=None, draw_samples=False,
+                           different_path_colors=False, use_pi=False):
+        def draw_distribution(mean, cov, pi, ax, color):
+            # How many sigmas to draw. 2 sigmas is >95%
+            N_SIGMA = 1
+            mean, cov = mean[:2], cov[:2, :2]
+            # Since covariance is SPD, svd will produce orthogonal eigenvectors
+            U, S, V = np.linalg.svd(cov)
+            # Calculate the angle of first eigenvector
+            angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
+
+            # Eigenvalues are now half-width and half-height squared
+            std = np.sqrt(S)
+            factor = 2 * N_SIGMA * (pi * n_paths if use_pi else 1)
+            alpha = 1 / n_paths * self.layer_sizes[0]
+            ellipse = matplotlib.patches.Ellipse(
+                mean, std[0] * factor, std[1] * factor, angle,
+                color=[*color[:3], alpha], linewidth=0)
+            ax.add_patch(ellipse)
+
+        if ax is not None:
+            plt.sca(ax)
+        if probs is None:
+            _, probs, _ = self.predict_path_probs(data)
+
+        n_dists = probs.shape[0]
+        n_paths = len(self.paths)
+        colors = cm.rainbow(np.linspace(
+            0, 1, n_paths if different_path_colors else n_dists))
+
+        # Draw the distributions plot
+        for dist_i in range(self.layer_sizes[0]):
+            dist = self.layers[0][dist_i]
+            for path_i in range(len(dist.mu_given_path)):
+                color = colors[dist_i * int(n_paths / n_dists) + path_i]\
+                    if different_path_colors else colors[dist_i]
+                draw_distribution(dist.mu_given_path[path_i],
+                                  dist.sigma_given_path[path_i],
+                                  dist.pi_given_path[path_i],
+                                  plt.gca(), color)
+
+        # Draw the samples plot
+        if draw_samples:
+            sample, sample_clust = self.random_sample(200)
+            for dist_i in range(self.layer_sizes[0]):
+                s_values = sample[sample_clust == dist_i]
+                color = colors[dist_i]
+                plt.gca().scatter(s_values[:, 0], s_values[:, 1], color=color,
+                                   label="%d" % (dist_i + 1), s=10)
+            plt.legend()
+
+        plt.gca().set_aspect('equal', 'box')
+        # recompute the ax.dataLim and update ax.viewLim using the new dataLim
+        plt.gca().relim()
+        plt.gca().autoscale_view()
+        plt.title("Distributions")
+
     def evaluate(self, data, iter_i):
         """
         :param data:
@@ -318,59 +390,17 @@ class GMN:
         self.log_lik.append(log_lik)
         stopping_criterion_reached = self.was_stopping_criterion_reached()
 
-        if not stopping_criterion_reached and (
-                not self.plot_predictions or
-                iter_i % self.plot_predictions != 0):
+        if not self.plot_evaluations or (not stopping_criterion_reached and
+                                          iter_i % self.plot_evaluations != 0):
             return False
 
-        n_paths = len(self.paths)
-        def draw_distribution(mean, cov, pi, ax, color):
-            # How many sigmas to draw. 2 sigmas is >95%
-            N_SIGMA = 1
-            mean, cov = mean[:2], cov[:2,:2]
-            # Since covariance is SPD, svd will produce orthogonal eigenvectors
-            U, S, V = np.linalg.svd(cov)
-            # Calculate the angle of first eigenvector
-            angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
-
-            # Eigenvalues are now half-width and half-height squared
-            std = np.sqrt(S)
-            factor = 2 * N_SIGMA * pi * n_paths
-            alpha = 1 / n_paths * self.layer_sizes[0]
-            ax.add_patch(matplotlib.patches.Ellipse(mean, std[0] * factor,
-                std[1] * factor, angle, color=[*color[:3], alpha], linewidth=0))
-
-        sample, sample_clust = self.random_sample(200)
-
-        colors = cm.rainbow(np.linspace(0, 1, probs.shape[0]))
-
-        # Draw the predictions plot
-        self.ax[0].clear()
-        data_colors = np.clip(probs.T @ colors, 0, 1)
-        self.ax[0].scatter(data[:, 0], data[:, 1], color=data_colors, s=10)
-        self.ax[0].set_aspect('equal', 'box')
-        self.ax[0].set_title("Probabilities")
-
-        # Draw the sample plot
-        self.ax[1].clear()
-        for dist_i in range(self.layer_sizes[0]):
-            s_values = sample[sample_clust == dist_i]
-            color = colors[dist_i]
-            self.ax[1].scatter(s_values[:, 0], s_values[:, 1], color=color,
-                               label="%d" % (dist_i + 1), s=10)
-            dist = self.layers[0][dist_i]
-            for path_i in range(len(dist.mu_given_path)):
-                draw_distribution(dist.mu_given_path[path_i],
-                                  dist.sigma_given_path[path_i],
-                                  dist.pi_given_path[path_i],
-                                  self.ax[1], color)
-        self.ax[1].set_xlim(self.ax[0].get_xlim())
-        self.ax[1].set_ylim(self.ax[0].get_ylim())
-        self.ax[1].set_aspect('equal', 'box')
-        self.ax[1].set_title("Sample")
-        self.ax[1].legend()
-
         # Draw the plots
+        self.ax[0].clear()
+        self.ax[1].clear()
+        self.plot_predictions(data, probs=probs, ax=self.ax[0])
+        self.plot_distributions(data, probs=probs, ax=self.ax[1])
+        self.ax[1].xlim(self.ax[0].get_xlim())
+        self.ax[1].ylim(self.ax[0].get_ylim())
         self.fig.suptitle("Iteration %d" % iter_i)
         plt.draw()
 
@@ -381,7 +411,7 @@ class GMN:
 
         return stopping_criterion_reached
 
-    def random_sample(self, num):
+    def random_sample(self, num, return_paths=False):
         """
         Randomly sample from the DGMM distribution
         :return tuple of sampled values and to which distribution each value
@@ -389,10 +419,12 @@ class GMN:
         """
         values = []
         dists = []
+        paths = []
 
         for i in range(num):
             value = normal.rvs(mean=np.zeros(self.in_dims[-1])).reshape([-1, 1])
             dist = 0
+            path = []
 
             for layer_i in range(len(self.layers) - 1, -1, -1):
                 layer = self.layers[layer_i]
@@ -402,10 +434,14 @@ class GMN:
                 value = dist.lambd @ value + dist.eta.reshape([-1, 1]) + \
                         normal.rvs(cov=dist.psi).reshape([-1, 1])
                 dist = dist_i
+                path.append(dist_i)
 
             values.append(value.reshape(-1))
             dists.append(dist)
+            paths.append(path[::-1])
 
+        if return_paths:
+            return np.array(values), np.array(paths)
         return np.array(values), np.array(dists)
 
     def fit(self, data):

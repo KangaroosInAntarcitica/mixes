@@ -1,7 +1,7 @@
 from sklearn.decomposition import FactorAnalysis
 import numpy as np
 from scipy.stats import multivariate_normal as normal
-from dgmm import AbstractDGMM
+from mixes import AbstractDGMM
 
 
 # fa = FactorAnalysis(n_components=3, rotation='varimax')

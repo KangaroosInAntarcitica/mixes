@@ -4,7 +4,6 @@ from scipy.stats import multivariate_normal as normal
 from scipy.stats import mvn
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use("TkAgg")
 import seaborn as sns
 
 
@@ -12,6 +11,8 @@ class SkewGMM:
     # Source: "Maximum likelihood estimation for multivariate skew normal
     # mixture models" Tsung I. Lin (2006)
     # https://www.sciencedirect.com/science/article/pii/S0047259X08001152
+    # R code:
+    # https://github.com/cran/mixsmsn/blob/master/R/smsn.mmix.R
 
     def __init__(self, num_dists, num_iter=10, evaluator=None, update_rate=0.1,
                  use_annealing=False, annealing_start_v=0.1, stopping_thresh=1e-4,
@@ -34,6 +35,7 @@ class SkewGMM:
         self.plot_predictions = plot_predictions
         self.plot_wait_for_input = plot_wait_for_input
         if self.plot_predictions:
+            matplotlib.use("TkAgg")
             plt.ion()
             self.fig, self.ax = plt.subplots(2, 1)
             self.ax[0].set_title("Predictions plot")
@@ -52,10 +54,10 @@ class SkewGMM:
             dist.w = 1 / self.num_dists
 
     def evaluate(self, data, iter_i):
-        if self.evaluator:
+        if self.evaluator is not None:
             prob_v, prob_dists = self.calculate_probs(data)
             pred = np.argmax(prob_dists, 1)
-            log_lik = np.sum(np.log(prob_v + AbstractDGMM.SMALL_VALUE))
+            log_lik = np.sum(np.log(prob_v)) if np.all(prob_v != 0) else -np.inf
             self.evaluator(iter_i, prob_dists, pred, log_lik)
 
         if self.plot_predictions:
@@ -129,14 +131,15 @@ class SkewGMM:
 
         for iter_i in range(self.num_iter):
             # Store the exp(z) in probs
-            _, prob_dists = self.calculate_probs(data, annealing_v=self.annealing_v)
+            _, prob_dists = self.calculate_probs(
+                data, annealing_v=self.annealing_v)
 
             w_sum = 0
 
             for dist_i in range(self.num_dists):
                 dist = self.dists[dist_i]
 
-                # E step
+                # Perform the E step
                 # Initialize holders for the expectations
                 exp_x = []
                 exp_xx = []
@@ -156,6 +159,7 @@ class SkewGMM:
                         cov = sigma[index][:, index]
                         cov_part_r = sigma[index, r]
                         add_mean = np.linalg.inv(cov) @ cov_part_r * mu[r]
+                        # mvn.mvnun is the cdf between given bounds
                         return mvn.mvnun(
                             lower=np.zeros(dim - 1),
                             upper=np.ones(dim - 1) * np.inf,
@@ -172,6 +176,7 @@ class SkewGMM:
                         cov = sigma[index][:index]
                         cov_part_rs = sigma[index, [r, s]]
                         add_mean = np.linalg.inv(cov) @ cov_part_rs @ mu[[r, s]]
+                        # mvn.mvnun is the cdf between given bounds
                         return mvn.mvnun(
                             lower=np.zeros(dim - 2),
                             upper=np.ones(dim - 2) * np.inf,
@@ -179,35 +184,28 @@ class SkewGMM:
                             covar=cov
                         )[0]
     
-                    # a = 0
-                    # alpha = math.prod([1 - normal.cdf(0, mean=mu[i], cov=sigma[i, i], allow_singular=True)
-                    #                    for i in range(len(mu))])
+                    # We have that a = 0. Therefore lower bound is zero
+                    # mvn.mvnun is the cdf between given bounds
                     alpha = mvn.mvnun(
                         lower=np.zeros_like(mu),
                         upper=np.ones_like(mu) * np.inf,
-                        means=mu, covar=sigma)[0]
+                        means=mu, covar=sigma)[0] + AbstractDGMM.SMALL_VALUE
     
-                    # Calculate the E(tau) and E(tau tau.T)
-                    # (equations 10, 11)
+                    # Calculate the E(tau)
+                    #   (equation 10, 8)
                     fr = np.array([normal.pdf(0, mean=mu[r], cov=sigma[r, r], allow_singular=True)
                                   for r in range(dim)])
                     Gr = np.array([calc_Gr(r) for r in range(dim)])
-                        # math.prod([
-                        #     1 - normal.cdf(0, mean=mu[j] + 1 / sigma[j, j] * sigma[i, j] * mu[i], cov=sigma[j, j], allow_singular=True)
-                        #     for j in range(len(mu))
-                        # ])
                     q = fr * Gr
                     exp_x_i = (mu + 1 / alpha * sigma @ q).reshape([-1, 1])
 
+                    # Calculate the E(tau tau.T)
+                    #   (equation 11, 9)
                     frs = np.array([[
                         normal.pdf([0, 0], mean=mu[[r, s]], cov=sigma[[r, s]][:, [r, s]], allow_singular=True)
                         for r in range(len(mu))] for s in range(len(mu))])
                     Grs = np.array([[calc_Grs(r, s) for r in range(len(mu))]
                                     for s in range(len(mu))])
-                        # math.prod([
-                        #     1 - normal.cdf(0, mean=mu[j] + 1 / sigma[j, j] * (sigma[r, j] * mu[r] + sigma[s, j] * mu[s]), cov=sigma[j, j], allow_singular=True)
-                        #     for j in range(len(mu))
-                        # ])
 
                     H = frs * Grs * (np.ones([dim, dim]) - np.eye(dim))
                     D = np.diag([
@@ -318,8 +316,8 @@ class SkewGMM:
             probs = np.log(2) * dim
             probs += normal.logpdf(values, mean=self.ksi, cov=omega,
                                    allow_singular=True)
-            probs += normal.logpdf(
-                (self.lambd @ omega_inv @ (values - self.ksi).T).T,
+            probs += normal.logcdf(
+                (self.lambd.T @ omega_inv @ (values - self.ksi).T).T,
                 cov=delta, allow_singular=True)
             if include_w:
                 probs += np.log(self.w)
@@ -331,7 +329,7 @@ class SkewGMM:
             omega, omega_inv, delta = self.omega, self.omega_inv, self.delta
 
             probs = 2 ** dim * normal.pdf(values, mean=self.ksi, cov=omega)
-            probs *= normal.pdf((self.lambd @ omega_inv @ (values - self.ksi).T).T,
+            probs *= normal.cdf((self.lambd @ omega_inv @ (values - self.ksi).T).T,
                                  cov=delta)
             if include_w:
                 probs *= self.w

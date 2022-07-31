@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.patches
 import matplotlib
-matplotlib.use("TkAgg")
 
 from .GaussianDistrib import GaussianDistrib
 
@@ -13,7 +12,7 @@ from .GaussianDistrib import GaussianDistrib
 class AbstractDGMM:
     SMALL_VALUE = 1e-20
 
-    def __init__(self, layer_sizes, dims, plot_predictions=True,
+    def __init__(self, layer_sizes, dims, plot_predictions=False,
                  plot_wait_for_input=False,
                  init='kmeans', num_iter=10, num_samples=500,
                  use_annealing=False, annealing_start_v=0.1,
@@ -42,6 +41,7 @@ class AbstractDGMM:
         self.plot_wait_for_input = plot_wait_for_input
         self.plot_predictions = int(plot_predictions)
         if self.plot_predictions:
+            matplotlib.use("TkAgg")
             plt.ion()
             self.fig, self.ax = plt.subplots(2, 1)
             self.ax[0].set_title("Predictions plot")
