@@ -5,15 +5,10 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.patches
 import matplotlib
-import seaborn as sns
-from .AbstractDGMM import AbstractDGMM
-
-from .GaussianDistrib import GaussianDistrib
+from .utils import *
 
 
 class GMN:
-    SMALL_VALUE = 1e-20
-
     def __init__(self, layer_sizes, dims, plot_evaluations=False,
                  plot_wait_for_input=False,
                  init='kmeans', num_iter=10, num_samples=500,
@@ -21,8 +16,8 @@ class GMN:
                  stopping_thresh=1e-5, update_rate=0.1,
                  evaluator=None, hard_distribution=False):
         def init_layer(layer_size, next_layer_size):
-            pi = np.ones([next_layer_size]) / layer_size
-            return [GaussianDistrib(pi.copy()) for _ in range(layer_size)]
+            tau = np.ones([next_layer_size]) / layer_size
+            return [GaussianDistrib(tau.copy()) for _ in range(layer_size)]
 
         # Dimensions on the input (next layer)
         self.in_dims = dims
@@ -38,7 +33,7 @@ class GMN:
         self.num_iter = num_iter
         self.num_samples = num_samples
 
-        self.paths = AbstractDGMM.get_paths_permutations(self.layer_sizes)
+        self.paths = get_paths_permutations(self.layer_sizes)
 
         # Display and computation parameters
         self.plot_wait_for_intput = plot_wait_for_input
@@ -57,7 +52,7 @@ class GMN:
         self.use_annealing = use_annealing
         self.annealing_v = annealing_start_v if use_annealing else 1
         self.annealing_step = (1 - self.annealing_v) /\
-                              (self.num_iter + self.SMALL_VALUE) / 0.9
+                              (self.num_iter + SMALL_VALUE) / 0.9
         self.hard_distribution = hard_distribution
 
         self.log_lik = []
@@ -102,11 +97,11 @@ class GMN:
                                 int(len(sigma) / self.next_layer_sizes[layer_i])
 
                     # Compute new pi, mu and sigma (also make it spd)
-                    dist_pi.append(dist.pi[prev_dist] * pi[prev_path])
+                    dist_pi.append(dist.tau[prev_dist] * pi[prev_path])
                     dist_mu.append(dist.eta + dist.lambd @ mu[prev_path])
                     sigma_i = dist.psi + dist.lambd @ sigma[
                         prev_path] @ dist.lambd.T
-                    dist_sigma.append(AbstractDGMM.make_spd(sigma_i))
+                    dist_sigma.append(make_spd(sigma_i))
 
                 # Save the values inside distribution
                 dist.pi_given_path = dist_pi
@@ -121,8 +116,8 @@ class GMN:
 
         return np.array(mu), np.array(sigma), np.array(pi)
 
-    def compute_paths_prob_given_out_values(self, values, layer_i:int,
-                                            annealing_value=1,
+    def compute_paths_prob_given_out_values(self, values, layer_i: int,
+                                            annealing_value: float = 1,
                                             hard_distributions=False):
         """
         At a specific layer compute the probability of output values given the
@@ -174,7 +169,7 @@ class GMN:
         prob_v_and_path = np.exp(log_prob_v_and_path)
         prob_v = np.sum(prob_v_and_path, axis=0)
         # Use the Bayes formula p(path|v) = p(v,path) / p(v)
-        prob_path_given_v = prob_v_and_path / (prob_v + self.SMALL_VALUE)
+        prob_path_given_v = prob_v_and_path / (prob_v + SMALL_VALUE)
         prob_v *= np.exp(log_prob_v_and_path_max)
 
         if hard_distributions:
@@ -216,9 +211,10 @@ class GMN:
                     else:
                         dist.eta = normal.rvs(mean=np.zeros(dim), cov=0.1)
                     dist.psi = np.eye(dim) / self.num_layers ** 2
-                    dist.lambd = np.random.random([dim, in_dim]) / self.num_layers ** 2
+                    dist.lambd = np.random.random([dim, in_dim]) \
+                                 / self.num_layers ** 2
                     dist.lambd /= dist.lambd.sum(axis=0, keepdims=True)
-                    dist.pi = np.ones_like(dist.pi) / self.layer_sizes[layer_i]
+                    dist.tau = np.ones_like(dist.tau) / self.layer_sizes[layer_i]
             return
 
         if self.init == 'kmeans':
@@ -244,7 +240,7 @@ class GMN:
                         dist.eta = prev_dist.eta
                         dist.lambd = prev_dist.lambd
                         dist.psi = prev_dist.psi
-                        dist.pi = prev_dist.pi = prev_dist.pi / 2
+                        dist.tau = prev_dist.tau = prev_dist.tau / 2
                         continue
 
                     index = clusters == cluster_i[dist_i]
@@ -271,37 +267,26 @@ class GMN:
                     dist.psi = np.diag(fa.noise_variance_)
 
                     if layer_i != 0:
-                        pis_sum = 0
+                        tau_sum = 0
                         for prev_dist_i in range(self.layer_sizes[layer_i - 1]):
                             prev_index = prev_clusters == prev_cluster_i[prev_dist_i]
-                            prob = index[prev_index].sum() / index.sum() + self.SMALL_VALUE
-                            pis_sum += prob
-                            self.layers[layer_i - 1][prev_dist_i].pi[dist_i] = prob
+                            prob = index[prev_index].sum() / index.sum() + SMALL_VALUE
+                            tau_sum += prob
+                            self.layers[layer_i - 1][prev_dist_i].tau[dist_i] = prob
 
                         for prev_dist_i in range(self.layer_sizes[layer_i - 1]):
-                            self.layers[layer_i - 1][prev_dist_i].pi[dist_i] /= pis_sum
+                            self.layers[layer_i - 1][prev_dist_i].tau[dist_i] /= tau_sum
 
                 if layer_i != 0:
                     for prev_dist_i in range(self.layer_sizes[layer_i - 1]):
                         prev_dist = self.layers[layer_i - 1][prev_dist_i]
-                        prev_dist.pi = np.array(prev_dist.pi)
+                        prev_dist.tau = np.array(prev_dist.tau)
 
                 values = next_values
                 prev_clusters = clusters
                 prev_cluster_i = cluster_i
         else:
             raise ValueError("Initialization '%s' is not supported" % self.init)
-
-    def was_stopping_criterion_reached(self):
-        log_lik = self.log_lik
-        if len(log_lik) >= 3:
-            aitken_acceleration = (log_lik[-1] - log_lik[-2]) / \
-                                  (log_lik[-2] - log_lik[-3])
-            l_inf = log_lik[-2] + (log_lik[-1] - log_lik[-2]) / \
-                    (1 - aitken_acceleration)
-            if np.abs(l_inf - log_lik[-1]) < self.stopping_thresh:
-                return True
-        return False
 
     def plot_predictions(self, data, probs=None, ax=None):
         if ax is not None:
@@ -318,7 +303,7 @@ class GMN:
         plt.gca().set_title("Probabilities")
 
     def plot_distributions(self, data, probs=None, ax=None, draw_samples=False,
-                           different_path_colors=False, use_pi=False):
+                           different_path_colors=False, use_pi=False, colors=None):
         def draw_distribution(mean, cov, pi, ax, color):
             # How many sigmas to draw. 2 sigmas is >95%
             N_SIGMA = 1
@@ -326,7 +311,7 @@ class GMN:
             # Since covariance is SPD, svd will produce orthogonal eigenvectors
             U, S, V = np.linalg.svd(cov)
             # Calculate the angle of first eigenvector
-            angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
+            angle = float(np.degrees(np.arctan2(U[1, 0], U[0, 0])))
 
             # Eigenvalues are now half-width and half-height squared
             std = np.sqrt(S)
@@ -344,8 +329,9 @@ class GMN:
 
         n_dists = probs.shape[0]
         n_paths = len(self.paths)
-        colors = cm.rainbow(np.linspace(
-            0, 1, n_paths if different_path_colors else n_dists))
+        if colors is None:
+            colors = cm.rainbow(np.linspace(
+                0, 1, n_paths if different_path_colors else n_dists))
 
         # Draw the distributions plot
         for dist_i in range(self.layer_sizes[0]):
@@ -388,7 +374,8 @@ class GMN:
             self.evaluator(iter_i, probs.T, clusters, log_lik)
 
         self.log_lik.append(log_lik)
-        stopping_criterion_reached = self.was_stopping_criterion_reached()
+        stopping_criterion_reached = was_stopping_criterion_reached(
+            self.log_lik, self.stopping_thresh)
 
         if not self.plot_evaluations or (not stopping_criterion_reached and
                                           iter_i % self.plot_evaluations != 0):
@@ -429,7 +416,7 @@ class GMN:
             for layer_i in range(len(self.layers) - 1, -1, -1):
                 layer = self.layers[layer_i]
                 dist_i = np.random.choice(len(layer),
-                    p=[layer[i].pi[dist] for i in range(len(layer))])
+                                          p=[layer[i].tau[dist] for i in range(len(layer))])
                 dist = layer[dist_i]
                 value = dist.lambd @ value + dist.eta.reshape([-1, 1]) + \
                         normal.rvs(cov=dist.psi).reshape([-1, 1])
@@ -474,14 +461,14 @@ class GMN:
                 # sampled z for next layer
                 z_in_samples = []
                 z_in_samples_probs = []
-                pis_sum = 0
+                tau_sum = 0
 
                 for dist_i in range(len(layer)):
                     # The combinations of lower layers are not included
                     dist_paths_num = math.prod(self.layer_sizes[layer_i+1:])
                     dist_paths = self.paths[:dist_paths_num]
                     dist = layer[dist_i]
-                    lambd, psi, eta, pi = dist.lambd, dist.psi, dist.eta, dist.pi
+                    lambd, psi, eta, tau = dist.lambd, dist.psi, dist.eta, dist.tau
 
                     # As in the paper we use
                     #   v = z[layer_i]
@@ -492,7 +479,7 @@ class GMN:
                     exp_v, exp_vv = np.zeros([dim_out, 1]), np.zeros([dim_out, dim_out])
                     exp_w, exp_ww = np.zeros([dim, 1]), np.zeros([dim, dim])
                     exp_vw = np.zeros([dim_out, dim])
-                    pi_probs = np.zeros_like(dist.pi)
+                    tau_probs = np.zeros_like(dist.tau)
 
                     for dist_path_i in range(dist_paths_num):
                         path_i = dist_path_i + dist_paths_num * dist_i
@@ -508,7 +495,7 @@ class GMN:
 
                         # Estimate the parameters of the p(z[k+1] | z[k]) distribution
                         ksi = inv(inv(sigma) + lambd.T @ inv(psi) @ lambd)
-                        ksi = AbstractDGMM.make_spd(ksi)
+                        ksi = make_spd(ksi)
 
                         # Shape [num_samples, dim[l-1]]
                         rho = (ksi @ (lambd.T @ inv(psi) @ (values - eta).T
@@ -527,9 +514,9 @@ class GMN:
 
                         if layer_i != self.num_layers - 1:
                             next_dist_i = path[layer_i + 1]
-                            pi_probs[next_dist_i] += probs.sum()
+                            tau_probs[next_dist_i] += probs.sum()
                         else:
-                            pi_probs += probs.sum()
+                            tau_probs += probs.sum()
 
                     # Rescale the variables
                     exp_v /= denom
@@ -547,13 +534,13 @@ class GMN:
                     #     - 2 * exp_vw @ lambd.T + lambd @ exp_ww @ lambd.T
                     psi = exp_vv - 2 * exp_vw @ lambd.T + \
                           lambd @ exp_ww @ lambd.T - eta @ eta.T
-                    pi = pi_probs
+                    tau = tau_probs
 
                     # Reshape eta to its original form
                     eta = eta.reshape([-1])
 
                     # Make SPD. psi is diagonal, therefore it is easier
-                    psi = (psi > 0) * psi + (psi <= 0) * self.SMALL_VALUE
+                    psi = (psi > 0) * psi + (psi <= 0) * SMALL_VALUE
                     # Make psi diagonal (this is a constraint we defined)
                     psi = np.diag(np.diag(psi))
 
@@ -562,12 +549,12 @@ class GMN:
                     lambd = dist.lambd * (1 - rate) + lambd * rate
                     eta = dist.eta * (1 - rate) + eta * rate
                     psi = dist.psi * (1 - rate) + psi * rate
-                    pi = dist.pi * (1 - rate) + pi * rate
+                    tau = dist.tau * (1 - rate) + tau * rate
 
                     # Set the values
-                    dist.lambd, dist.eta, dist.psi, dist.pi =\
-                            lambd, eta, psi, pi
-                    pis_sum += pi
+                    dist.lambd, dist.eta, dist.psi, dist.tau =\
+                            lambd, eta, psi, tau
+                    tau_sum += tau
 
                     # Sample values for next layer
                     for dist_path_i in range(dist_paths_num):
@@ -584,7 +571,7 @@ class GMN:
 
                         # Estimate the parameters of the p(z[k+1] | z[k]) distribution
                         ksi = inv(inv(sigma) + lambd.T @ inv(psi) @ lambd)
-                        ksi = AbstractDGMM.make_spd(ksi)
+                        ksi = make_spd(ksi)
 
                         # Shape [num_samples, dim[l-1]]
                         rho = (ksi @ (lambd.T @ inv(psi) @ (values - eta).T
@@ -600,9 +587,9 @@ class GMN:
                         z_in_samples.append(z_sample)
                         z_in_samples_probs.append(sample_probs)
 
-                # Rescale the pi to sum up to 1
+                # Rescale the tau to sum up to 1
                 for dist_i in range(len(layer)):
-                    layer[dist_i].pi /= pis_sum
+                    layer[dist_i].tau /= tau_sum
 
                 # Fill in the samples for next layer
                 z_in_samples = np.concatenate(z_in_samples)
@@ -616,7 +603,7 @@ class GMN:
             # Finish iteration
             if self.use_annealing:
                 self.annealing_v += self.annealing_step
-                self.annealing_v = np.clip(self.annealing_v, 0, 1)
+                self.annealing_v = float(np.clip(self.annealing_v, 0, 1))
 
             self.compute_path_distributions()
             stopping_criterion_reached = self.evaluate(data, iter_i + 1)

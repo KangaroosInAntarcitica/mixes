@@ -1,4 +1,8 @@
-from .AbstractDGMM import *
+from .AbstractDGMM import AbstractDGMM
+import numpy as np
+from scipy.stats import multivariate_normal as normal
+from .utils import *
+import math
 
 
 class SamplingDGMM(AbstractDGMM):
@@ -30,14 +34,14 @@ class SamplingDGMM(AbstractDGMM):
                 # sampled z for next layer
                 z_in_samples = []
                 z_in_samples_probs = []
-                pis_sum = 0
+                tau_sum = 0
 
                 for dist_i in range(len(layer)):
                     # The combinations of lower layers are not included
                     dist_paths_num = math.prod(self.layer_sizes[layer_i+1:])
                     dist_paths = self.paths[:dist_paths_num]
                     dist = layer[dist_i]
-                    lambd, psi, eta, pi = dist.lambd, dist.psi, dist.eta, dist.pi
+                    lambd, psi, eta, tau = dist.lambd, dist.psi, dist.eta, dist.tau
 
                     # As in the paper we use
                     #   v = z[layer_i]
@@ -49,8 +53,6 @@ class SamplingDGMM(AbstractDGMM):
                     exp_w, exp_ww = np.zeros([dim, 1]), np.zeros([dim, dim])
                     exp_vw = np.zeros([dim_out, dim])
 
-                    # TODO remove
-                    # log_lik_i = 0
 
                     for dist_path_i in range(dist_paths_num):
                         path_i = dist_path_i + dist_paths_num * dist_i
@@ -66,7 +68,7 @@ class SamplingDGMM(AbstractDGMM):
 
                         # Estimate the parameters of the p(z[k+1] | z[k]) distribution
                         ksi = inv(inv(sigma) + lambd.T @ inv(psi) @ lambd)
-                        ksi = self.make_spd(ksi)
+                        ksi = make_spd(ksi)
 
                         # Shape [num_samples, dim[l-1]]
                         rho = (ksi @ (lambd.T @ inv(psi) @ (values - eta).T
@@ -83,16 +85,6 @@ class SamplingDGMM(AbstractDGMM):
                         # E(z @ z.T|s) = Var(z|s) + E^2(z|s)
                         exp_ww += ksi * probs.sum() + (rho * probs).T @ rho
 
-                        # TODO remove
-                        # v = values - eta - (lambd @ rho.T).T
-                        # log_lik_i += -0.5 * (
-                        #         np.log(2 * np.pi) * probs.sum() +
-                        #         np.log(np.linalg.det(psi)) * probs.sum() +
-                        #         np.sum([v[i:i + 1] @ np.linalg.pinv(psi) @ v[
-                        #                                                    i:i + 1].T *
-                        #                 probs[i] for i in range(len(v))])
-                        # )
-
                     # Rescale the variables
                     exp_v /= denom
                     exp_vv /= denom
@@ -102,20 +94,20 @@ class SamplingDGMM(AbstractDGMM):
 
                     # Estimate the parameters
                     lambd = (exp_vw - exp_v @ exp_w.T) @ \
-                            inv(exp_w @ exp_w.T - exp_ww)
+                            inv(exp_ww - exp_w @ exp_w.T)
                     eta = exp_v - lambd @ exp_w
                     # psi = exp_vv - 2 * exp_v @ eta.T \
                     #     + eta @ eta.T + 2 * eta @ exp_w.T @ lambd.T \
                     #     - 2 * exp_vw @ lambd.T + lambd @ exp_ww @ lambd.T
                     psi = exp_vv - 2 * exp_vw @ lambd.T + \
                           lambd @ exp_ww @ lambd.T - eta @ eta.T
-                    pi = denom
+                    tau = denom
 
                     # Reshape eta to its original form
                     eta = eta.reshape([-1])
 
                     # Make SPD. psi is diagonal, therefore it is easier
-                    psi = (psi > 0) * psi + (psi <= 0) * self.SMALL_VALUE
+                    psi = (psi > 0) * psi + (psi <= 0) * SMALL_VALUE
                     # Make psi diagonal (this is a constraint we defined)
                     psi = np.diag(np.diag(psi))
 
@@ -124,15 +116,12 @@ class SamplingDGMM(AbstractDGMM):
                     lambd = dist.lambd * (1 - rate) + lambd * rate
                     eta = dist.eta * (1 - rate) + eta * rate
                     psi = dist.psi * (1 - rate) + psi * rate
-                    pi = dist.pi * (1 - rate) + pi * rate
+                    tau = dist.tau * (1 - rate) + tau * rate
 
                     # Set the values
-                    dist.lambd, dist.eta, dist.psi, dist.pi =\
-                            lambd, eta, psi, pi
-                    pis_sum += pi
-
-                    # TODO remove
-                    # log_lik_i = 0
+                    dist.lambd, dist.eta, dist.psi, dist.tau =\
+                            lambd, eta, psi, tau
+                    tau_sum += tau
 
                     # Sample values for next layer
                     for dist_path_i in range(dist_paths_num):
@@ -149,7 +138,7 @@ class SamplingDGMM(AbstractDGMM):
 
                         # Estimate the parameters of the p(z[k+1] | z[k]) distribution
                         ksi = inv(inv(sigma) + lambd.T @ inv(psi) @ lambd)
-                        ksi = self.make_spd(ksi)
+                        ksi = make_spd(ksi)
 
                         # Shape [num_samples, dim[l-1]]
                         rho = (ksi @ (lambd.T @ inv(psi) @ (values - eta).T
@@ -165,20 +154,9 @@ class SamplingDGMM(AbstractDGMM):
                         z_in_samples.append(z_sample)
                         z_in_samples_probs.append(sample_probs)
 
-                        # TODO remove
-                    #     v = values - eta - (lambd @ rho.T).T
-                    #     log_lik_i += -0.5 * (
-                    #             np.log(2 * np.pi) * probs.sum() +
-                    #             np.log(np.linalg.det(psi)) * probs.sum() +
-                    #             np.sum([v[i:i + 1] @ np.linalg.pinv(psi) @ v[i:i + 1].T * probs[i] for i in range(len(v))])
-                    #     )
-                    #
-                    # # TODO remove
-                    # print("  Log lik %d:%d = %.5f" % (layer_i, dist_i, log_lik_i))
-
-                # Rescale the pi to sum up to 1
+                # Rescale the tau to sum up to 1
                 for dist_i in range(len(layer)):
-                    layer[dist_i].pi /= pis_sum
+                    layer[dist_i].tau /= tau_sum
 
                 # Fill in the samples for next layer
                 z_in_samples = np.concatenate(z_in_samples)
@@ -192,7 +170,7 @@ class SamplingDGMM(AbstractDGMM):
             # Finish iteration
             if self.use_annealing:
                 self.annealing_v += self.annealing_step
-                self.annealing_v = np.clip(self.annealing_v, 0, 1)
+                self.annealing_v = float(np.clip(self.annealing_v, 0, 1))
 
             self.compute_path_distributions()
             stopping_criterion_reached = self.evaluate(data, iter_i + 1)

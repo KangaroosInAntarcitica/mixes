@@ -1,11 +1,14 @@
-from .AbstractDGMM import *
+from .AbstractDGMM import AbstractDGMM
+import numpy as np
+from scipy.stats import multivariate_normal as normal
+from .utils import *
 
 
 class GMM(AbstractDGMM):
     def __init__(self, num_dists, *args, **kwargs):
         super().__init__([num_dists], [1], *args, **kwargs)
 
-    def compute_likelihood(self, data, annealing_v=1):
+    def compute_likelihood(self, data, annealing_v: float = 1):
         """
         :return: probability of data
         """
@@ -19,15 +22,15 @@ class GMM(AbstractDGMM):
             sigma = dist.sigma_given_path[0]
 
             dist.prob_theta_given_y = \
-                dist.pi * normal.pdf(data, mean=dist.eta,
-                                     cov=sigma, allow_singular=True)
+                dist.tau * normal.pdf(data, mean=dist.eta,
+                                      cov=sigma, allow_singular=True)
             if annealing_v != 1:
                 dist.prob_theta_given_y **= annealing_v
             probs_sum += dist.prob_theta_given_y
 
         for dist_i in range(n_dists):
             # Normalize
-            dists[dist_i].prob_theta_given_y /= (probs_sum + self.SMALL_VALUE)
+            dists[dist_i].prob_theta_given_y /= (probs_sum + SMALL_VALUE)
 
         return probs_sum
 
@@ -75,7 +78,7 @@ class GMM(AbstractDGMM):
                 rate = self.update_rate
                 eta = eta * rate + dist.eta * (1 - rate)
                 sigma = sigma * rate + dist.sigma_given_path[0] * (1 - rate)
-                pi = pi * rate + dist.pi * (1 - rate)
+                pi = pi * rate + dist.tau * (1 - rate)
                 pis_sum += pi
 
                 # Perform certain steps to make it consistent with the
@@ -85,15 +88,16 @@ class GMM(AbstractDGMM):
                 lambd = u @ np.diag(np.sqrt(s))
 
                 # Set the values
-                dist.eta, dist.lambd, dist.psi, dist.pi = eta, lambd, psi, pi
+                dist.eta, dist.lambd, dist.psi, dist.tau = eta, lambd, psi, pi
                 dist.sigma_given_path = [psi + lambd @ lambd.T]
                 dist.mu_given_path = [eta]
 
             for dist_i in range(n_dists):
-                dists[dist_i].pi /= pis_sum
+                dists[dist_i].tau /= pis_sum
 
             if self.use_annealing:
-                self.annealing_v = np.clip(self.annealing_v + self.annealing_step, 0, 1)
+                self.annealing_v = self.annealing_v + self.annealing_step
+                self.annealing_v = float(np.clip(self.annealing_v, 0, 1))
 
         self.compute_likelihood(data)
         self.evaluate(data, self.num_iter)
@@ -106,7 +110,7 @@ class GMM(AbstractDGMM):
 
         for i in range(num):
             dist_i = np.random.choice(
-                len(dists), p=[dists[i].pi for i in range(len(dists))])
+                len(dists), p=[dists[i].tau for i in range(len(dists))])
             dist = dists[dist_i]
             cov = dist.sigma_given_path[0]
             value = normal.rvs(mean=dist.eta, cov=cov) * np.array([1])

@@ -54,7 +54,7 @@ def fit_algorithms_to_distribution(data, n_samples, algorithms, algorithm_names,
         # plt.gca().set_aspect('equal')
         plt.xlim(xlim)
         plt.ylim(ylim)
-        log_lik.append(evaluator.get("log_lik"))
+        log_lik.append(evaluator.get_result_metric("log_lik"))
         result.append(alg)
 
         if separate_plots:
@@ -96,7 +96,7 @@ def skew_gaussian_distribution_experiment(n_samples, seed=None, separate_plots=F
     gmn = GMN([1, 5], [2, 2], init='random', num_iter=100,
               update_rate=1, stopping_thresh=0)
     skew = SkewGMM(1, num_iter=30, update_rate=1)
-    algorithms = [gmm, skew, gmn]
+    algorithms = [gmm, gmm, gmn]
     algorithm_names = ["GMM", "Skew GMM", "GMN"]
 
     xlim, ylim = [-10, 30], [-10, 30]
@@ -188,5 +188,5 @@ def fit_distribution(data, n_samples=2000, plot_levels=5, plot_bw_adjust=2):
 
 
 if __name__ == "__main__":
-    # skew_gaussian_distribution_experiment(n_samples=2000, separate_plots=True)
-    old_faithful_distribution_experiment(n_samples=2000, seed=10)
+    skew_gaussian_distribution_experiment(n_samples=2000, separate_plots=False)
+    # old_faithful_distribution_experiment(n_samples=2000, seed=10)

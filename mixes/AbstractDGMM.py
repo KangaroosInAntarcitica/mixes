@@ -1,17 +1,13 @@
 import numpy as np
-import math
 from scipy.stats import multivariate_normal as normal
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.patches
 import matplotlib
-
-from .GaussianDistrib import GaussianDistrib
+from .utils import *
 
 
 class AbstractDGMM:
-    SMALL_VALUE = 1e-20
-
     def __init__(self, layer_sizes, dims, plot_predictions=False,
                  plot_wait_for_input=False,
                  init='kmeans', num_iter=10, num_samples=500,
@@ -19,8 +15,8 @@ class AbstractDGMM:
                  stopping_thresh=1e-5, update_rate=0.1,
                  evaluator=None):
         def init_layer(layer_size, dim):
-            pi = 1 / layer_size
-            return [GaussianDistrib(dim, pi) for _ in range(layer_size)]
+            tau = 1 / layer_size
+            return [GaussianDistrib(dim, tau) for _ in range(layer_size)]
 
         # Dimensions on the input (next layer)
         self.in_dims = dims
@@ -35,7 +31,7 @@ class AbstractDGMM:
         self.num_iter = num_iter
         self.num_samples = num_samples
 
-        self.paths = self.get_paths_permutations(self.layer_sizes)
+        self.paths = get_paths_permutations(self.layer_sizes)
 
         # Display and computation parameters
         self.plot_wait_for_input = plot_wait_for_input
@@ -62,7 +58,8 @@ class AbstractDGMM:
         self.evaluator = evaluator
 
     def fit(self, data):
-        raise NotImplementedError("Fit is not implemented in the abstract class")
+        raise NotImplementedError(
+            "Fit is not implemented in the abstract class")
 
     def compute_path_distributions(self):
         """
@@ -97,11 +94,11 @@ class AbstractDGMM:
                 #   (upper layers repeated for each dist_i of lower layers)
                 for prev_path in range(len(sigma)):
                     # Compute new pi, mu and sigma (also make it spd)
-                    dist_pi.append(dist.pi * pi[prev_path])
+                    dist_pi.append(dist.tau * pi[prev_path])
                     dist_mu.append(dist.eta + dist.lambd @ mu[prev_path])
                     sigma_i = dist.psi + dist.lambd @ sigma[
                         prev_path] @ dist.lambd.T
-                    dist_sigma.append(self.make_spd(sigma_i))
+                    dist_sigma.append(make_spd(sigma_i))
 
                 # Save the values inside distribution
                 dist.pi_given_path = dist_pi
@@ -116,8 +113,8 @@ class AbstractDGMM:
 
         return np.array(mu), np.array(sigma), np.array(pi)
 
-    def compute_paths_prob_given_out_values(self, values, layer_i:int,
-                                            annealing_value:float=1):
+    def compute_paths_prob_given_out_values(self, values, layer_i: int,
+                                            annealing_value: float=1):
         """
         At a specific layer compute the probability of output values given the
         current distribution parameters
@@ -167,7 +164,7 @@ class AbstractDGMM:
         prob_v_and_path = np.exp(log_prob_v_and_path)
         prob_v = np.sum(prob_v_and_path, axis=0)
         # Use the Bayes formula p(path|v) = p(v,path) / p(v)
-        prob_path_given_v = prob_v_and_path / (prob_v + self.SMALL_VALUE)
+        prob_path_given_v = prob_v_and_path / (prob_v + SMALL_VALUE)
         prob_v *= np.exp(log_prob_v_and_path_max)
 
         return prob_v, prob_path_given_v, prob_v_and_path
@@ -203,7 +200,7 @@ class AbstractDGMM:
                     dist.psi = np.eye(dim) / self.num_layers ** 2
                     dist.lambd = np.random.random([dim, in_dim]) / self.num_layers ** 2
                     dist.lambd /= dist.lambd.sum(axis=0, keepdims=True)
-                    dist.pi = 1 / self.layer_sizes[layer_i]
+                    dist.tau = 1 / self.layer_sizes[layer_i]
             return
 
         if self.init == 'kmeans-1':
@@ -224,7 +221,7 @@ class AbstractDGMM:
                     dist.lambd = -1 + 2 * np.random.random([dim, in_dim])
                     dist.lambd /= np.apply_along_axis(
                         np.linalg.norm, 1, dist.lambd).reshape([-1, 1])
-                    dist.pi = 1 / self.layer_sizes[layer_i]
+                    dist.tau = 1 / self.layer_sizes[layer_i]
             return
 
         if self.init == 'deep-kmeans':
@@ -246,12 +243,12 @@ class AbstractDGMM:
                     dist.lambd = -1 + 2 * np.random.random([dim, in_dim])
                     dist.lambd /= np.apply_along_axis(
                         np.linalg.norm, 1, dist.lambd).reshape([-1, 1])
-                    dist.pi = len(dist_values) / len(values)
+                    dist.tau = len(dist_values) / len(values)
 
-                    values[kmeans.labels_ == labels[dist_i]] = \
-                        (np.linalg.pinv(dist.lambd) @
-                        (np.linalg.pinv(dist.psi) @ dist_values.T -
-                         dist.eta.reshape([-1, 1]))).T
+                    values[kmeans.labels_ == labels[dist_i]] = (
+                            np.linalg.pinv(dist.lambd) @
+                            (np.linalg.pinv(dist.psi) @ dist_values.T -
+                            dist.eta.reshape([-1, 1]))).T
             return
 
         if self.init == 'kmeans':
@@ -285,52 +282,14 @@ class AbstractDGMM:
 
                     dist.lambd = fa.components_.T
                     if fa.components_.shape[0] != fa.n_components:
-                        dist.lambd = np.repeat(dist.lambd, fa.n_components, axis=1)
+                        dist.lambd = np.repeat(
+                            dist.lambd, fa.n_components, axis=1)
                     dist.psi = np.diag(fa.noise_variance_)
-                    dist.pi = 1 / self.layer_sizes[layer_i]
+                    dist.tau = 1 / self.layer_sizes[layer_i]
 
                 values = next_values
         else:
             raise ValueError("Initialization '%s' is not supported" % self.init)
-
-        # from sklearn.decomposition import FactorAnalysis
-        #
-        # for layer_i in range(self.num_layers):
-        #     next_data = np.zeros([len(data), self.dims[layer_i]])
-        #
-        #     for dist_i in range(self.layer_sizes[layer_i]):
-        #         index = self.paths[paths_i][:, layer_i] == dist_i
-        #         values = data[index]
-        #         fa = FactorAnalysis(n_components=self.dims[layer_i],
-        #                             rotation='varimax')
-        #         fa.fit(values)
-        #
-        #         dist = self.layers[layer_i][dist_i]
-        #         dist.eta = fa.mean_
-        #         dist.lambd = fa.components_.T
-        #         dist.psi = np.diag(fa.noise_variance_)
-        #         dist.pi = 1 / self.layer_sizes[layer_i]
-        #
-        #         next_data[index] = fa.transform(values)
-        #
-        #     data = next_data
-
-    @staticmethod
-    def was_stopping_criterion_reached(log_likelihoods, stopping_thresh):
-        """
-
-        :param log_likelihoods: list of log likelihoods
-        :return: whether the stopping criterion was reached
-        """
-        log_lik = log_likelihoods
-        if len(log_lik) >= 3:
-            aitken_acceleration = (log_lik[-1] - log_lik[-2]) / \
-                                  (log_lik[-2] - log_lik[-3])
-            l_inf = log_lik[-2] + (log_lik[-1] - log_lik[-2]) / \
-                    (1 - aitken_acceleration)
-            if np.abs(l_inf - log_lik[-1]) < stopping_thresh:
-                return True
-        return False
 
     def evaluate(self, data, iter_i):
         """
@@ -346,7 +305,7 @@ class AbstractDGMM:
             self.evaluator(iter_i, probs.T, clusters, log_lik)
 
         self.log_lik.append(log_lik)
-        stopping_criterion_reached = self.was_stopping_criterion_reached(
+        stopping_criterion_reached = was_stopping_criterion_reached(
             self.log_lik, self.stopping_thresh)
 
         if (not stopping_criterion_reached or
@@ -361,7 +320,7 @@ class AbstractDGMM:
             # Since covariance is SPD, svd will produce orthogonal eigenvectors
             U, S, V = np.linalg.svd(cov)
             # Calculate the angle of first eigenvector
-            angle = np.degrees(np.arctan2(U[1, 0], U[0, 0]))
+            angle = float(np.degrees(np.arctan2(U[1, 0], U[0, 0])))
 
             # Eigenvalues are now half-width and half-height squared
             std = np.sqrt(S)
@@ -424,7 +383,7 @@ class AbstractDGMM:
             for layer_i in range(len(self.layers) - 1, -1, -1):
                 layer = self.layers[layer_i]
                 dist_i = np.random.choice(len(layer),
-                    p=[layer[i].pi for i in range(len(layer))])
+                                          p=[layer[i].tau for i in range(len(layer))])
                 dist = layer[dist_i]
                 value = dist.lambd @ value + dist.eta.reshape([-1, 1]) + \
                         normal.rvs(cov=dist.psi).reshape([-1, 1])
@@ -434,57 +393,3 @@ class AbstractDGMM:
             dists.append(dist)
 
         return np.array(values), np.array(dists)
-
-    @staticmethod
-    def get_paths_permutations(layer_sizes):
-        num = math.prod(layer_sizes)
-        return np.array(
-            [np.arange(num) // math.prod(layer_sizes[i + 1:]) % layer_sizes[i]
-             for i in range(len(layer_sizes))]).T
-
-    @staticmethod
-    def make_spd(A):
-        """
-        Find the nearest symmetric positive definite (SPD) matrix to the given
-        Source: https://itecnote.com/tecnote/python-convert-matrix-to-positive-semi-definite/
-        """
-        # symmetric
-        A = 0.5 * (A + A.T)
-
-        # positive definite
-        _, s, V = np.linalg.svd(A)
-        H = np.dot(V.T, np.dot(np.diag(s), V))
-        A = (A + H) / 2
-        A = (A + A.T) / 2
-
-        if AbstractDGMM.is_pd(A):
-            return A
-
-        spacing = np.spacing(np.linalg.norm(A))
-        # The above is different from [1]. It appears that MATLAB's `chol` Cholesky
-        # decomposition will accept matrixes with exactly 0-eigenvalue, whereas
-        # Numpy's will not. So where [1] uses `eps(mineig)` (where `eps` is Matlab
-        # for `np.spacing`), we use the above definition. CAVEAT: our `spacing`
-        # will be much larger than [1]'s `eps(mineig)`, since `mineig` is usually on
-        # the order of 1e-16, and `eps(1e-16)` is on the order of 1e-34, whereas
-        # `spacing` will, for Gaussian random matrixes of small dimension, be on
-        # othe order of 1e-16. In practice, both ways converge, as the unit test
-        # below suggests.
-        I = np.eye(A.shape[0])
-        k = 1
-
-        while not AbstractDGMM.is_pd(A):
-            mineig = np.min(np.real(np.linalg.eigvals(A)))
-            A += I * (-mineig * k ** 2 + spacing)
-            k += 1
-
-        return A
-
-    @staticmethod
-    def is_pd(A):
-        """Returns true when input is positive-definite, via Cholesky"""
-        try:
-            _ = np.linalg.cholesky(A)
-            return True
-        except np.linalg.LinAlgError:
-            return False

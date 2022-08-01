@@ -2,8 +2,7 @@ import numpy as np
 from scipy.stats import multivariate_normal as normal
 from scipy.stats import skewnorm as skew_normal
 import matplotlib.pyplot as plt
-from mixes import SamplingDGMM as DGMM, SkewGMM
-from mixes import GradientDescentDGMM as GDGMM
+from mixes import DGMM
 from mixes import GMM
 from mixes import GMN
 from sklearn.cluster import KMeans
@@ -123,11 +122,6 @@ def try_manual(algorithm='dgmm'):
                    plot_wait_for_input=False,
                    num_iter=100,
                    evaluator=evaluator)
-    elif algorithm == 'gdgmm':
-        alg = GDGMM([2, 2], [2, 1], init='kmeans', plot_predictions=10,
-                   plot_wait_for_input=False,
-                   num_iter=100, step_size=1e-2, num_samples=100,
-                   evaluator=evaluator)
     elif algorithm == 'gmm':
         alg = GMM(2, init='random', plot_predictions=1, num_iter=40,
                   plot_wait_for_input=True,
@@ -151,8 +145,8 @@ def try_ecoli(algorithm='dgmm'):
     #             indexes[j] = 0
     # data = data[:, indexes.astype('bool')]
 
-    layer_sizes = [7, 4, 3]
-    dims = [6, 4, 3]
+    layer_sizes = [7, 10, 10]
+    dims = [6, 5, 4]
     evaluator = Evaluator(data, labels, 'silhouette', 'accuracy', 'ARI')
 
     if algorithm == 'gmm':
@@ -164,17 +158,15 @@ def try_ecoli(algorithm='dgmm'):
     elif algorithm == 'dgmm':
         alg = DGMM(layer_sizes, dims, init='kmeans', plot_predictions=10,
                    num_iter=100, num_samples=100,
-                   update_rate=1e-4,
-                   stopping_thresh=1e-4,
-                   use_annealing=True, annealing_start_v=0.01,
+                   update_rate=1e-4, stopping_thresh=1e-4,
+                   # use_annealing=True, annealing_start_v=0.01,
                    evaluator=evaluator)
     elif algorithm == 'gmn':
-        layer_sizes = [7, 12, 3]
-        dims = [6, 4, 3]
+        # layer_sizes = [7, 12, 3]
+        # dims = [6, 4, 3]
         alg = GMN(layer_sizes, dims, init='kmeans',
-                  plot_predictions=10,
                   update_rate=1e-4, stopping_thresh=0,
-                  use_annealing=True, annealing_start_v=0.01,
+                  use_annealing=True, annealing_start_v=0.2,
                   num_iter=100, evaluator=evaluator)
     elif algorithm == 'gdgmm':
         alg = GDGMM([7, 6, 3], [6, 2, 1], init='kmeans', plot_predictions=10,
@@ -235,7 +227,8 @@ def try_olive(algorithm='dgmm'):
 
 
 if __name__ == "__main__":
-    algorithm = 'gmm'
+    # algorithm = 'gmn'
+    algorithm = 'gmn'
     # try_manual(algorithm)
     try_ecoli(algorithm)
     # try_wine(algorithm)

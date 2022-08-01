@@ -1,7 +1,7 @@
-from .AbstractDGMM import AbstractDGMM
 import numpy as np
 from scipy.stats import multivariate_normal as normal
 from scipy.stats import mvn
+from .utils import *
 import matplotlib.pyplot as plt
 import matplotlib
 import seaborn as sns
@@ -92,8 +92,8 @@ class SkewGMM:
             else:
                 plt.pause(0.001)
 
-        stopping_criterion_reached = AbstractDGMM\
-            .was_stopping_criterion_reached(self.log_lik, self.stopping_thresh)
+        stopping_criterion_reached =\
+            was_stopping_criterion_reached(self.log_lik, self.stopping_thresh)
         return stopping_criterion_reached
 
     def calculate_probs(self, data, annealing_v=1):
@@ -113,7 +113,7 @@ class SkewGMM:
         probs = np.exp(log_probs)
         prob_v = np.sum(probs, axis=0)
         # Use the Bayes formula p(path|v) = p(v,path) / p(v)
-        prob_dists = probs / (prob_v + AbstractDGMM.SMALL_VALUE)
+        prob_dists = probs / (prob_v + SMALL_VALUE)
         prob_v *= np.exp(log_probs_max)
 
         return prob_v, prob_dists.T
@@ -189,7 +189,7 @@ class SkewGMM:
                     alpha = mvn.mvnun(
                         lower=np.zeros_like(mu),
                         upper=np.ones_like(mu) * np.inf,
-                        means=mu, covar=sigma)[0] + AbstractDGMM.SMALL_VALUE
+                        means=mu, covar=sigma)[0] + SMALL_VALUE
     
                     # Calculate the E(tau)
                     #   (equation 10, 8)
@@ -240,7 +240,7 @@ class SkewGMM:
                 dist.lambd = dist.lambd * (1 - rate) + lambd * rate
                 dist.sigma = dist.sigma * (1 - rate) + sigma * rate
 
-                dist.sigma = AbstractDGMM.make_spd(dist.sigma)
+                dist.sigma = make_spd(dist.sigma)
 
                 w_sum += dist.w
 
@@ -250,8 +250,8 @@ class SkewGMM:
 
             # Perform a step of annealing
             if self.use_annealing:
-                self.annealing_v = np.clip(
-                    self.annealing_v + self.annealing_step, 0, 1)
+                self.annealing_v = self.annealing_v + self.annealing_step
+                self.annealing_v = float(np.clip(self.annealing_v, 0, 1))
 
             # Update certain parameter values
             for dist_i in range(self.num_dists):

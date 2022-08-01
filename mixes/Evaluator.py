@@ -60,7 +60,7 @@ class Evaluator:
             text = "Iter %3d (%s)" % (iter_i, text)
             print(text)
 
-    def get(self, key):
+    def get_result_metric(self, key):
         if key not in self.values:
             raise KeyError("There is no metric '%s' collected" % key)
         if len(self.values[key]) < 1:
@@ -68,8 +68,12 @@ class Evaluator:
 
         return self.values[key][-1]
 
+    def get_result(self):
+        return self.get_dataframe().iloc[-1]
+
     def get_values(self):
         return self.values
 
     def get_dataframe(self):
         return pd.DataFrame(self.values).set_index('iter')
+

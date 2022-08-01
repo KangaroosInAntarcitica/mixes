@@ -1,9 +1,26 @@
-from .AbstractDGMM import *
+from .AbstractDGMM import AbstractDGMM
+import math
+from scipy.stats import multivariate_normal as normal
+import numpy as np
+import utils
 
 
-class CinziaDGMM(AbstractDGMM):
-    SMALL_VALUE = 1e-20
+class ViroliDGMM(AbstractDGMM):
+    """
+    Not inteded for use. Use SamplingDGMM instead.
 
+    An attempt of implementing DGMM based on implementation of paper
+    "Deep Gaussian mixture models" by Cinzia Viroli, Geoffrey J. McLachlan (2019)
+    https://link.springer.com/article/10.1007/s11222-017-9793-z
+
+    Code for R is present in github repository:
+        https://github.com/suren-rathnayake/deepgmm
+
+    Alternative implementation is for paper
+    "A bumpy journey: exploring deep gaussian mixture models" by M. Selosse et. al
+    and is in github respository:
+        https://github.com/ansubmissions/ICBINB
+    """
     def compute_dists_prob_given_y(self, data):
         self.compute_path_distributions()
         _, prob_path_given_y, _ = self.compute_paths_prob_given_out_values(data, 0)
@@ -113,7 +130,7 @@ class CinziaDGMM(AbstractDGMM):
                 for dist_i in range(len(layer)):
                     dist = layer[dist_i]
                     probs = dist.prob_theta_given_y.reshape([-1, 1])
-                    denom = probs.sum() + self.SMALL_VALUE
+                    denom = probs.sum() + SMALL_VALUE
 
                     exp_z = exp_z_in_given_dist_z[dist_i]
                     exp_zz = exp_zz_in_given_dist_z[dist_i]
@@ -131,16 +148,16 @@ class CinziaDGMM(AbstractDGMM):
                     # Make SPD. psi is diagonal, therefore it is easier
                     psi = (psi > 0) * psi + (psi <= 0) * 0.000001
                     eta = ((values - (lambd @ exp_z.T).T) * probs).sum(axis=0) / denom
-                    pi = probs.mean() + self.SMALL_VALUE
+                    pi = probs.mean() + SMALL_VALUE
                     pis_sum += pi
 
                     print("%d:%d, eta=%.3g, lambd=%.3g, psi=%.3g" %
                           (layer_i, dist_i, eta.mean(), lambd.mean(), psi.mean()))
-                    dist.pi, dist.eta, dist.lambd, dist.psi = pi, eta, lambd, psi
+                    dist.tau, dist.eta, dist.lambd, dist.psi = pi, eta, lambd, psi
 
                 # Rescale the pis
                 for dist_i in range(len(layer)):
-                    layer[dist_i].pi /= pis_sum
+                    layer[dist_i].tau /= pis_sum
 
                 # Fill the values for the next layer
                 # Expected value of sample

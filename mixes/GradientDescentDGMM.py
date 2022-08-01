@@ -2,6 +2,10 @@ from .AbstractDGMM import *
 
 
 class GradientDescentDGMM(AbstractDGMM):
+    """
+    This is a depracated implementation of a gradient-descent-based DGMM
+    Not inteded for use
+    """
     def __init__(self, layer_sizes, dims, step_size=0.1, *args, **kwargs):
         super().__init__(layer_sizes, dims, *args, **kwargs)
 
@@ -65,7 +69,7 @@ class GradientDescentDGMM(AbstractDGMM):
                     deta = dmu[paths_index].sum(axis=0)
                     dlambd = 0
                     dp = (dpi[self.paths[:, layer_i] == dist_i] *
-                          pi[self.paths[:, layer_i] == dist_i]).sum() / dist.pi
+                          pi[self.paths[:, layer_i] == dist_i]).sum() / dist.tau
 
                     for dist_path_i in range(n_dist_paths):
                         next_dist_paths = math.prod(self.layer_sizes[layer_i + 2:])
@@ -98,8 +102,8 @@ class GradientDescentDGMM(AbstractDGMM):
                     # dist.psi += dpsi * step_size
                     # dist.psi = (dist.psi > 0) * dist.psi + \
                     #            (dist.psi <= 0) * 0.0001
-                    dist.pi += dp * step_size
-                    pis_sum += dist.pi
+                    dist.tau += dp * step_size
+                    pis_sum += dist.tau
 
                     # dist.lambd /= np.apply_along_axis(np.linalg.norm, 0, dist.lambd)
                     print("\t %d:%d, lambd = %.3f, eta = %.3f, psi = %.3f, pi = %.3f" %
@@ -111,7 +115,7 @@ class GradientDescentDGMM(AbstractDGMM):
 
                 # Rescale the pis
                 for dist_i in range(self.layer_sizes[layer_i]):
-                    self.layers[layer_i][dist_i].pi /= pis_sum
+                    self.layers[layer_i][dist_i].tau /= pis_sum
 
                 dsigma, dmu = dsigma_new, dmu_new
 

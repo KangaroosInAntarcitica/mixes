@@ -1,10 +1,5 @@
-from .AbstractDGMM import AbstractDGMM
-from .SelosseDGMM import SelosseDGMM
-from .CinziaDGMM import CinziaDGMM
-from .SamplingDGMM import SamplingDGMM
-from .GradientDescentDGMM import GradientDescentDGMM
-from .GDGMM import GDGMM
-from .GMM import GMM
-from .GMN import GMN
 from .Evaluator import Evaluator
+from .GMM import GMM
 from .SkewGMM import SkewGMM
+from .SamplingDGMM import SamplingDGMM as DGMM
+from .GMN import GMN
