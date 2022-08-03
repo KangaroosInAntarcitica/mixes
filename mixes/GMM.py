@@ -1,121 +1,173 @@
-from .AbstractDGMM import AbstractDGMM
-import numpy as np
 from scipy.stats import multivariate_normal as normal
 from .utils import *
 
 
-class GMM(AbstractDGMM):
-    def __init__(self, num_dists, *args, **kwargs):
-        super().__init__([num_dists], [1], *args, **kwargs)
+class GMM:
+    def __init__(self, num_dists,
+                 init='kmeans', num_iter=10,
+                 use_annealing=False, annealing_start_v=0.1, update_rate=0.1,
+                 evaluator=None, stopping_criterion=None,
+                 var_regularization=1e-6):
+        self.num_dists = num_dists
+        self.dists = [self.GaussDist(tau=1 / self.num_dists)
+                      for i in range(self.num_dists)]
 
-    def compute_likelihood(self, data, annealing_v: float = 1):
+        self.init = init
+        self.num_iter = num_iter
+
+        self.use_annealing = use_annealing
+        self.annealing_v = annealing_start_v if use_annealing else 1
+        self.annealing_step = (1 - self.annealing_v) / \
+                              (self.num_iter + SMALL_VALUE) / 0.9
+
+        self.update_rate = update_rate
+        self.evaluator = evaluator
+        self.stopping_criterion = stopping_criterion
+        self.var_regularization = var_regularization
+
+    def predict_path_probs(self, data, annealing_v: float = 1):
         """
         :return: probability of data
         """
-        n_dists = self.layer_sizes[0]
-        dists = self.layers[0]
+        log_prob_v_and_dist = []
+        for dist_i in range(self.num_dists):
+            dist = self.dists[dist_i]
 
-        probs_sum = 0
-        for dist_i in range(n_dists):
-            dist = dists[dist_i]
-            # Set the variables required for optimization
-            sigma = dist.sigma_given_path[0]
-
-            dist.prob_theta_given_y = \
-                dist.tau * normal.pdf(data, mean=dist.eta,
-                                      cov=sigma, allow_singular=True)
+            log_prob = np.log(dist.tau)
+            log_prob += normal.logpdf(data, mean=dist.mu, cov=dist.sigma,
+                                      allow_singular=True)
             if annealing_v != 1:
-                dist.prob_theta_given_y **= annealing_v
-            probs_sum += dist.prob_theta_given_y
+                log_prob *= annealing_v
+            log_prob_v_and_dist.append(log_prob)
 
-        for dist_i in range(n_dists):
-            # Normalize
-            dists[dist_i].prob_theta_given_y /= (probs_sum + SMALL_VALUE)
+        # dim [dist, v]
+        log_prob_v_and_dist = np.array(log_prob_v_and_dist)
 
-        return probs_sum
+        # Rescale the variables for numerical stability
+        log_prob_v_and_dist_max = np.max(log_prob_v_and_dist, axis=0)
+        log_prob_v_and_dist -= log_prob_v_and_dist_max
+        prob_v_and_dist = np.exp(log_prob_v_and_dist)
+        prob_v = np.sum(prob_v_and_dist, axis=0)
+        # Use the Bayes formula p(path|v) = p(v,path) / p(v)
+        prob_dist_given_v = prob_v_and_dist / (prob_v + SMALL_VALUE)
+        prob_v *= np.exp(log_prob_v_and_dist_max)
 
-    def predict_path_probs(self, data, annealing_value=1):
-        probs_v = self.compute_likelihood(data, annealing_value)
-        dist_probs = np.array([self.layers[0][dist_i].prob_theta_given_y
-                               for dist_i in range(len(self.layers[0]))]).T
-        return dist_probs.T, dist_probs.T, probs_v
+        return prob_dist_given_v, prob_v
+
+    def predict(self, data, probs=False):
+        prob_dist_given_v, _ = self.predict_path_probs(data)
+        return prob_dist_given_v.T if probs else \
+            np.argmax(prob_dist_given_v, 0)
+
+    def evaluate(self, data, iter_i: int):
+        probs, prob_v = self.predict_path_probs(data)
+        clusters = np.argmax(probs, 0)
+        log_lik = np.sum(np.log(prob_v)) if np.all(prob_v != 0) else -np.inf
+
+        if self.evaluator is not None:
+            self.evaluator(iter_i, data, probs.T, clusters, log_lik)
+
+        stopping_criterion_reached = \
+            self.stopping_criterion(iter_i, data, probs.T, clusters, log_lik) \
+            if self.stopping_criterion is not None else False
+
+        return stopping_criterion_reached
+
+    def _init_params(self, data):
+        if self.init == 'kmeans':
+            from sklearn.cluster import KMeans
+            kmeans = KMeans(self.num_dists)
+            clusters = kmeans.fit_predict(data)
+            clusters_i = np.unique(clusters)
+
+            for i in range(self.num_dists):
+                values = data[clusters == clusters_i[i]]
+                dist = self.dists[i]
+                dist.mu = kmeans.cluster_centers_[i]
+                sigma = np.cov(values.T)
+                dist.sigma = sigma
+                dist.tau = np.sum(clusters == clusters_i[i]) / len(clusters)
+        else:
+            raise ValueError("Initialization '%s' is not supported" % self.init)
 
     def fit(self, data):
-        assert self.num_layers == 1, "GMM only allows one layer"
-
-        n_dists = self.layer_sizes[0]
-        dists = self.layers[0]
-
-        self.out_dims = [data.shape[1]]
-        self.in_dims = [data.shape[1]]
-        # Initialize the paramter and set them correctly for GMM
+        # Initialize the parameters
         self._init_params(data)
-
-        for dist_i in range(n_dists):
-            dist = dists[dist_i]
-            dist.sigma_given_path = [dist.psi + dist.lambd @ dist.lambd.T]
-            dist.mu_given_path = [dist.eta]
+        self.evaluate(data, 0)
 
         for iter_i in range(self.num_iter):
             # Expectation step
-            self.compute_likelihood(data, self.annealing_v)
-            self.evaluate(data, iter_i)
+            prob_dist_given_v, prob_v = \
+                self.predict_path_probs(data, self.annealing_v)
 
-            pis_sum = 0
+            tau_sum = 0
 
             # Maximization step
-            for dist_i in range(n_dists):
-                dist = dists[dist_i]
-
-                probs = dist.prob_theta_given_y.reshape([-1, 1])
+            for dist_i in range(self.num_dists):
+                dist = self.dists[dist_i]
+                probs = prob_dist_given_v[dist_i].reshape([-1, 1])
 
                 denom = np.sum(probs)
-                eta = (data * probs).sum(0) / denom
-                sigma = ((data - eta) * probs).T @ (data - eta) / denom
-                pi = denom / len(data)
+                mu = (data * probs).sum(0) / denom
+                sigma = ((data - mu) * probs).T @ (data - mu) / denom
+                tau = denom / len(data)
+
+                sigma += np.eye(len(sigma)) * self.var_regularization
 
                 # Update the parameters
                 rate = self.update_rate
-                eta = eta * rate + dist.eta * (1 - rate)
-                sigma = sigma * rate + dist.sigma_given_path[0] * (1 - rate)
-                pi = pi * rate + dist.tau * (1 - rate)
-                pis_sum += pi
-
-                # Perform certain steps to make it consistent with the
-                #   abstract dgmm. As a result sigma = psi + lambda @ lambd.T
-                psi = np.eye(data.shape[1]) * 0
-                u, s, vh = np.linalg.svd(sigma, hermitian=True)
-                lambd = u @ np.diag(np.sqrt(s))
+                mu = mu * rate + dist.mu * (1 - rate)
+                sigma = sigma * rate + dist.sigma * (1 - rate)
+                tau = tau * rate + dist.tau * (1 - rate)
+                tau_sum += tau
 
                 # Set the values
-                dist.eta, dist.lambd, dist.psi, dist.tau = eta, lambd, psi, pi
-                dist.sigma_given_path = [psi + lambd @ lambd.T]
-                dist.mu_given_path = [eta]
+                dist.tau, dist.mu, dist.sigma = tau, mu, sigma
 
-            for dist_i in range(n_dists):
-                dists[dist_i].tau /= pis_sum
+            for dist_i in range(self.num_dists):
+                self.dists[dist_i].tau /= tau_sum
+
+            stopping_criterion_reached = self.evaluate(data, iter_i + 1)
+            if stopping_criterion_reached:
+                break
 
             if self.use_annealing:
                 self.annealing_v = self.annealing_v + self.annealing_step
                 self.annealing_v = float(np.clip(self.annealing_v, 0, 1))
 
-        self.compute_likelihood(data)
-        self.evaluate(data, self.num_iter)
         return self.predict(data)
 
     def random_sample(self, num):
         values = []
         clusters = []
-        dists = self.layers[0]
 
         for i in range(num):
             dist_i = np.random.choice(
-                len(dists), p=[dists[i].tau for i in range(len(dists))])
-            dist = dists[dist_i]
-            cov = dist.sigma_given_path[0]
-            value = normal.rvs(mean=dist.eta, cov=cov) * np.array([1])
+                self.num_dists,
+                p=[self.dists[i].tau for i in range(self.num_dists)])
+            dist = self.dists[dist_i]
+            value = normal.rvs(mean=dist.mu, cov=dist.sigma) * np.array([1])
 
             values.append(value.reshape(-1))
             clusters.append(dist_i)
 
         return np.array(values), np.array(clusters)
+
+    class GaussDist:
+        def __init__(self, tau=None, mu=None, sigma=None):
+            self.tau = tau
+            self.mu = mu
+            self.sigma = sigma
+
+    @staticmethod
+    def _calculate_lambda_psi(sigma):
+        """
+        Calculate lambda and psi if needed to convert to a dgmm format
+            As a result sigma = psi + lambda @ lambd.T
+        :param sigma: sigma
+        :return: lambda, psi
+        """
+        psi = np.eye(sigma.shape[0]) * 0
+        u, s, vh = np.linalg.svd(sigma, hermitian=True)
+        lambd = u @ np.diag(np.sqrt(s))
+        return lambd, psi

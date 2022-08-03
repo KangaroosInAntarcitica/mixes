@@ -1,4 +1,3 @@
-import numpy as np
 from scipy.stats import multivariate_normal as normal
 from scipy.stats import mvn
 from .utils import *

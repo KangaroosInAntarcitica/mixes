@@ -1,4 +1,4 @@
-from .AbstractDGMM import AbstractDGMM
+from .DGMM import AbstractDGMM
 import math
 from scipy.stats import multivariate_normal as normal
 import numpy as np
@@ -6,21 +6,7 @@ import utils
 
 
 class ViroliDGMM(AbstractDGMM):
-    """
-    Not inteded for use. Use SamplingDGMM instead.
 
-    An attempt of implementing DGMM based on implementation of paper
-    "Deep Gaussian mixture models" by Cinzia Viroli, Geoffrey J. McLachlan (2019)
-    https://link.springer.com/article/10.1007/s11222-017-9793-z
-
-    Code for R is present in github repository:
-        https://github.com/suren-rathnayake/deepgmm
-
-    Alternative implementation is for paper
-    "A bumpy journey: exploring deep gaussian mixture models" by M. Selosse et. al
-    and is in github respository:
-        https://github.com/ansubmissions/ICBINB
-    """
     def compute_dists_prob_given_y(self, data):
         self.compute_path_distributions()
         _, prob_path_given_y, _ = self.compute_paths_prob_given_out_values(data, 0)

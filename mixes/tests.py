@@ -1,5 +1,5 @@
 import unittest
-from .AbstractDGMM import *
+from .DGMM import *
 
 
 class TestDGMM(unittest.TestCase):

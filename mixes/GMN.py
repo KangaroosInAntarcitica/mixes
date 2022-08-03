@@ -11,13 +11,17 @@ from .utils import *
 class GMN:
     def __init__(self, layer_sizes, dims, plot_evaluations=False,
                  plot_wait_for_input=False,
-                 init='kmeans', num_iter=10, num_samples=500,
-                 use_annealing=False, annealing_start_v=0.1,
-                 stopping_thresh=1e-5, update_rate=0.1,
-                 evaluator=None, hard_distribution=False):
+                 init='kmeans', num_iter=100, num_samples=500,
+                 use_annealing=False, annealing_start_v=0.1, update_rate=0.1,
+                 evaluator=None, hard_distribution=False,
+                 stopping_criterion=None,
+                 var_regularization=1e-4):
         def init_layer(layer_size, next_layer_size):
             tau = np.ones([next_layer_size]) / layer_size
             return [GaussianDistrib(tau.copy()) for _ in range(layer_size)]
+
+        if len(layer_sizes) != len(dims):
+            raise ValueError("The size of layer_sizes and dims must match")
 
         # Dimensions on the input (next layer)
         self.in_dims = dims
@@ -55,11 +59,11 @@ class GMN:
                               (self.num_iter + SMALL_VALUE) / 0.9
         self.hard_distribution = hard_distribution
 
-        self.log_lik = []
-        self.stopping_thresh = stopping_thresh
+        self.stopping_criterion = stopping_criterion
 
         self.update_rate = update_rate
         self.evaluator = evaluator
+        self.var_regularization = var_regularization
 
     def compute_path_distributions(self):
         """
@@ -153,7 +157,7 @@ class GMN:
                 p = normal.logpdf(values, mean=mu[path_i],
                                   cov=sigma[path_i], allow_singular=True)
                 # log_prob_v_given_path.append(p)
-                log_prob_v_and_path.append(p + np.log(pi[path_i]))
+                log_prob_v_and_path.append(p + np.log(pi[path_i] + SMALL_VALUE))
 
         # Size [n_paths, len(values)]
         # log_prob_v_given_path = np.array(log_prob_v_given_path)
@@ -192,11 +196,8 @@ class GMN:
 
     def predict(self, data, probs=False):
         _, prob_dist_given_v, _ = self.predict_path_probs(data)
-
-        if probs:
-            return prob_dist_given_v.T
-        else:
-            return np.argmax(prob_dist_given_v, 0)
+        return prob_dist_given_v.T if probs else \
+            np.argmax(prob_dist_given_v, 0)
 
     def _init_params(self, data):
         if self.init == 'random':
@@ -215,9 +216,7 @@ class GMN:
                                  / self.num_layers ** 2
                     dist.lambd /= dist.lambd.sum(axis=0, keepdims=True)
                     dist.tau = np.ones_like(dist.tau) / self.layer_sizes[layer_i]
-            return
-
-        if self.init == 'kmeans':
+        elif self.init == 'kmeans':
             from sklearn.cluster import KMeans
             from sklearn.decomposition import FactorAnalysis
             import warnings
@@ -227,9 +226,11 @@ class GMN:
             prev_cluster_i = None
 
             for layer_i in range(self.num_layers):
-                kmeans = KMeans(n_clusters=self.layer_sizes[layer_i],
-                                n_init=30, max_iter=200)
-                clusters = kmeans.fit_predict(values)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    kmeans = KMeans(n_clusters=self.layer_sizes[layer_i],
+                                    n_init=30, max_iter=200)
+                    clusters = kmeans.fit_predict(values)
                 cluster_i = np.unique(clusters)
                 next_values = np.zeros([len(values), self.in_dims[layer_i]])
 
@@ -262,8 +263,10 @@ class GMN:
                     dist.eta = fa.mean_
 
                     dist.lambd = fa.components_.T
-                    if fa.components_.shape[0] != fa.n_components:
-                        dist.lambd = np.repeat(dist.lambd, fa.n_components, axis=1)
+                    if dist.lambd.shape[1] < self.in_dims[layer_i]:
+                        dims_r = self.in_dims[layer_i] - dist.lambd.shape[1]
+                        lambd_r = np.zeros([len(dist.lambd), dims_r])
+                        dist.lambd = np.concatenate([dist.lambd, lambd_r], 1)
                     dist.psi = np.diag(fa.noise_variance_)
 
                     if layer_i != 0:
@@ -303,11 +306,13 @@ class GMN:
         plt.gca().set_title("Probabilities")
 
     def plot_distributions(self, data, probs=None, ax=None, draw_samples=False,
-                           different_path_colors=False, use_pi=False, colors=None):
+                           different_path_colors=False, use_pi=False, colors=None,
+                           axis=[0, 1]):
         def draw_distribution(mean, cov, pi, ax, color):
             # How many sigmas to draw. 2 sigmas is >95%
             N_SIGMA = 1
-            mean, cov = mean[:2], cov[:2, :2]
+            index = [axis[0], axis[1]]
+            mean, cov = mean[index], cov[index][:, index]
             # Since covariance is SPD, svd will produce orthogonal eigenvectors
             U, S, V = np.linalg.svd(cov)
             # Calculate the angle of first eigenvector
@@ -350,7 +355,7 @@ class GMN:
             for dist_i in range(self.layer_sizes[0]):
                 s_values = sample[sample_clust == dist_i]
                 color = colors[dist_i]
-                plt.gca().scatter(s_values[:, 0], s_values[:, 1], color=color,
+                plt.gca().scatter(s_values[:, axis[0]], s_values[:, axis[1]], color=color,
                                    label="%d" % (dist_i + 1), s=10)
             plt.legend()
 
@@ -371,11 +376,11 @@ class GMN:
         log_lik = np.sum(np.log(prob_v)) if np.all(prob_v != 0) else -np.inf
 
         if self.evaluator is not None:
-            self.evaluator(iter_i, probs.T, clusters, log_lik)
+            self.evaluator(iter_i, data, probs.T, clusters, log_lik)
 
-        self.log_lik.append(log_lik)
-        stopping_criterion_reached = was_stopping_criterion_reached(
-            self.log_lik, self.stopping_thresh)
+        stopping_criterion_reached = \
+            self.stopping_criterion(iter_i, data, probs.T, clusters, log_lik) \
+            if self.stopping_criterion is not None else False
 
         if not self.plot_evaluations or (not stopping_criterion_reached and
                                           iter_i % self.plot_evaluations != 0):
@@ -532,8 +537,8 @@ class GMN:
                     # psi = exp_vv - 2 * exp_v @ eta.T \
                     #     + eta @ eta.T + 2 * eta @ exp_w.T @ lambd.T \
                     #     - 2 * exp_vw @ lambd.T + lambd @ exp_ww @ lambd.T
-                    psi = exp_vv - 2 * exp_vw @ lambd.T + \
-                          lambd @ exp_ww @ lambd.T - eta @ eta.T
+                    psi = exp_vv - 2 * exp_vw @ lambd.T \
+                          + lambd @ exp_ww @ lambd.T - eta @ eta.T
                     tau = tau_probs
 
                     # Reshape eta to its original form
@@ -544,6 +549,14 @@ class GMN:
                     # Make psi diagonal (this is a constraint we defined)
                     psi = np.diag(np.diag(psi))
 
+                    # Add regularization
+                    lambd2 = lambd @ lambd.T + \
+                             np.eye(len(psi)) * self.var_regularization
+                    l, d, _ = np.linalg.svd(lambd2, hermitian=True)
+                    i = np.argsort(d)[-lambd.shape[1]:]
+                    lambd = l[:,i] @ np.diag(np.sqrt(d[i]))
+                    psi = psi + np.eye(len(psi)) * self.var_regularization
+
                     # Perform the update
                     rate = self.update_rate
                     lambd = dist.lambd * (1 - rate) + lambd * rate
@@ -553,7 +566,7 @@ class GMN:
 
                     # Set the values
                     dist.lambd, dist.eta, dist.psi, dist.tau =\
-                            lambd, eta, psi, tau
+                        lambd, eta, psi, tau
                     tau_sum += tau
 
                     # Sample values for next layer

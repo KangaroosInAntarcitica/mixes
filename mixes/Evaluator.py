@@ -19,12 +19,11 @@ class Evaluator:
         'RI': lambda data, labels, pred, probs: metrics.rand_score(labels, pred)
     }
 
-    def __init__(self, data, labels=None, *metrics, show_log_lik=True,
+    def __init__(self, labels=None, *metrics, show_log_lik=True,
                  print_metrics=True):
         self.show_log_lik = show_log_lik
         self.metrics = {}
 
-        self.data = data
         self.labels = labels
 
         for metric in metrics:
@@ -41,7 +40,7 @@ class Evaluator:
 
         self.print_metrics = print_metrics
 
-    def __call__(self, iter_i, probs, pred, log_lik):
+    def __call__(self, iter_i, data, probs, pred, log_lik):
         m = []
 
         self.values['iter'].append(iter_i)
@@ -51,7 +50,7 @@ class Evaluator:
             self.values['log_lik'].append(log_lik)
 
         for metric, func in self.metrics.items():
-            value = func(self.data, self.labels, pred, probs)
+            value = func(data, self.labels, pred, probs)
             m.append("%s: %.5f" % (metric, value))
             self.values[metric].append(value)
 

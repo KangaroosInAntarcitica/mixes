@@ -1,19 +1,32 @@
-import numpy as np
 from scipy.stats import multivariate_normal as normal
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib.patches
-import matplotlib
 from .utils import *
 
 
-class AbstractDGMM:
-    def __init__(self, layer_sizes, dims, plot_predictions=False,
-                 plot_wait_for_input=False,
-                 init='kmeans', num_iter=10, num_samples=500,
+class DGMM:
+    """
+    DGMM - Deep Gaussian Mixture Model
+
+    This is an independent implementation. The original implementation by
+    authors can be found by the links below:
+
+    Paper:
+    "Deep Gaussian mixture models" by Cinzia Viroli, Geoffrey J. McLachlan (2019)
+    https://link.springer.com/article/10.1007/s11222-017-9793-z
+    Code for R in github:
+        https://github.com/suren-rathnayake/deepgmm
+
+    Paper:
+    "A bumpy journey: exploring deep gaussian mixture models" by M. Selosse et. al
+    Code for R in github:
+        https://github.com/ansubmissions/ICBINB
+    """
+
+    def __init__(self, layer_sizes, dims,
+                 init='kmeans', num_iter=100, num_samples=500,
                  use_annealing=False, annealing_start_v=0.1,
-                 stopping_thresh=1e-5, update_rate=0.1,
-                 evaluator=None):
+                 update_rate=0.1,
+                 stopping_criterion=None,
+                 evaluator=None, var_regularization=1e-4):
         def init_layer(layer_size, dim):
             tau = 1 / layer_size
             return [GaussianDistrib(dim, tau) for _ in range(layer_size)]
@@ -33,33 +46,17 @@ class AbstractDGMM:
 
         self.paths = get_paths_permutations(self.layer_sizes)
 
-        # Display and computation parameters
-        self.plot_wait_for_input = plot_wait_for_input
-        self.plot_predictions = int(plot_predictions)
-        if self.plot_predictions:
-            matplotlib.use("TkAgg")
-            plt.ion()
-            self.fig, self.ax = plt.subplots(2, 1)
-            self.ax[0].set_title("Predictions plot")
-            self.ax[0].set_title("Distributions plot")
-            plt.draw()
-            plt.show(block=False)
-
         self.init = init
 
         self.use_annealing = use_annealing
         self.annealing_v = annealing_start_v if use_annealing else 1
         self.annealing_step = (1 - self.annealing_v) / self.num_iter / 0.9
 
-        self.log_lik = []
-        self.stopping_thresh = stopping_thresh
+        self.stopping_criterion = stopping_criterion
 
         self.update_rate = update_rate
         self.evaluator = evaluator
-
-    def fit(self, data):
-        raise NotImplementedError(
-            "Fit is not implemented in the abstract class")
+        self.var_regularization = var_regularization
 
     def compute_path_distributions(self):
         """
@@ -179,11 +176,8 @@ class AbstractDGMM:
 
     def predict(self, data, probs=False):
         _, prob_dist_given_v, _ = self.predict_path_probs(data)
-
-        if probs:
-            return prob_dist_given_v.T
-        else:
-            return np.argmax(prob_dist_given_v, 0)
+        return prob_dist_given_v.T if probs else \
+            np.argmax(prob_dist_given_v, 0)
 
     def _init_params(self, data):
         if self.init == 'random':
@@ -201,57 +195,7 @@ class AbstractDGMM:
                     dist.lambd = np.random.random([dim, in_dim]) / self.num_layers ** 2
                     dist.lambd /= dist.lambd.sum(axis=0, keepdims=True)
                     dist.tau = 1 / self.layer_sizes[layer_i]
-            return
-
-        if self.init == 'kmeans-1':
-            from sklearn.cluster import KMeans
-            kmeans = KMeans(n_clusters=self.layer_sizes[0])
-            kmeans.fit_predict(data)
-
-            for layer_i in range(self.num_layers):
-                for dist_i in range(self.layer_sizes[layer_i]):
-                    dist = self.layers[layer_i][dist_i]
-                    dim, in_dim = self.out_dims[layer_i], self.in_dims[layer_i]
-
-                    if layer_i == 0:
-                        dist.eta = kmeans.cluster_centers_[dist_i]
-                    else:
-                        dist.eta = normal.rvs(mean=np.zeros(dim), cov=3)
-                    dist.psi = np.eye(dim) / 4 / self.num_layers ** 2
-                    dist.lambd = -1 + 2 * np.random.random([dim, in_dim])
-                    dist.lambd /= np.apply_along_axis(
-                        np.linalg.norm, 1, dist.lambd).reshape([-1, 1])
-                    dist.tau = 1 / self.layer_sizes[layer_i]
-            return
-
-        if self.init == 'deep-kmeans':
-            from sklearn.cluster import KMeans
-
-            values = np.copy(data)
-            for layer_i in range(self.num_layers):
-                kmeans = KMeans(n_clusters=self.layer_sizes[layer_i])
-                kmeans.fit_predict(values)
-                labels = np.unique(kmeans.labels_)
-
-                for dist_i in range(self.layer_sizes[layer_i]):
-                    dist_values = values[kmeans.labels_ == labels[dist_i]]
-                    dist = self.layers[layer_i][dist_i]
-                    dim, in_dim = self.out_dims[layer_i], self.in_dims[layer_i]
-
-                    dist.eta = kmeans.cluster_centers_[dist_i]
-                    dist.psi = np.diag(np.var(dist_values, axis=0))
-                    dist.lambd = -1 + 2 * np.random.random([dim, in_dim])
-                    dist.lambd /= np.apply_along_axis(
-                        np.linalg.norm, 1, dist.lambd).reshape([-1, 1])
-                    dist.tau = len(dist_values) / len(values)
-
-                    values[kmeans.labels_ == labels[dist_i]] = (
-                            np.linalg.pinv(dist.lambd) @
-                            (np.linalg.pinv(dist.psi) @ dist_values.T -
-                            dist.eta.reshape([-1, 1]))).T
-            return
-
-        if self.init == 'kmeans':
+        elif self.init == 'kmeans':
             from sklearn.cluster import KMeans
             from sklearn.decomposition import FactorAnalysis
             import warnings
@@ -259,9 +203,11 @@ class AbstractDGMM:
             values = data
 
             for layer_i in range(self.num_layers):
-                kmeans = KMeans(n_clusters=self.layer_sizes[layer_i],
-                                n_init=30, max_iter=200)
-                clusters = kmeans.fit_predict(values)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    kmeans = KMeans(n_clusters=self.layer_sizes[layer_i],
+                                    n_init=30, max_iter=200)
+                    clusters = kmeans.fit_predict(values)
                 cluster_i = np.unique(clusters)
                 next_values = np.zeros([len(values), self.in_dims[layer_i]])
 
@@ -291,6 +237,187 @@ class AbstractDGMM:
         else:
             raise ValueError("Initialization '%s' is not supported" % self.init)
 
+    def fit(self, data):
+        inv = np.linalg.pinv
+        num_samples = self.num_samples
+        self.out_dims[0] = data.shape[1]
+
+        self._init_params(data)
+        self.compute_path_distributions()
+        self.evaluate(data, 0)
+
+        for iter_i in range(self.num_iter):
+            # Initialize the variables
+            # Shape [num_samples, dim[layer_i - 1]]
+            values = data
+            values_probs = np.repeat(1, len(values))
+
+            # Update all the layers one by one
+            for layer_i in range(self.num_layers):
+                layer = self.layers[layer_i]
+                dim = self.in_dims[layer_i]
+                dim_out = self.out_dims[layer_i]
+
+                _, prob_paths_given_values, _ = \
+                    self.compute_paths_prob_given_out_values(values, layer_i,
+                        annealing_value=self.annealing_v)
+
+                # sampled z for next layer
+                z_in_samples = []
+                z_in_samples_probs = []
+                tau_sum = 0
+
+                for dist_i in range(len(layer)):
+                    # The combinations of lower layers are not included
+                    dist_paths_num = math.prod(self.layer_sizes[layer_i+1:])
+                    dist_paths = self.paths[:dist_paths_num]
+                    dist = layer[dist_i]
+                    lambd, psi, eta, tau = dist.lambd, dist.psi, dist.eta, dist.tau
+
+                    # As in the paper we use
+                    #   v = z[layer_i]
+                    #   w = z[layer_i + 1]
+                    # Initialize the values for estimated parameters:
+                    #   E(v), E(v @ v.T), E(w), E(w @ w.T), E(v @ w.T)
+                    denom = 0
+                    exp_v, exp_vv = np.zeros([dim_out, 1]), np.zeros([dim_out, dim_out])
+                    exp_w, exp_ww = np.zeros([dim, 1]), np.zeros([dim, dim])
+                    exp_vw = np.zeros([dim_out, dim])
+
+
+                    for dist_path_i in range(dist_paths_num):
+                        path_i = dist_path_i + dist_paths_num * dist_i
+                        path = dist_paths[dist_path_i]
+
+                        if layer_i == self.num_layers - 1:
+                            mu, sigma = np.zeros(dim), np.eye(dim)
+                        else:
+                            dist_next = self.layers[layer_i + 1][path[layer_i+1]]
+                            next_path_i = dist_path_i % math.prod(self.layer_sizes[layer_i+2:])
+                            mu = dist_next.mu_given_path[next_path_i]
+                            sigma = dist_next.sigma_given_path[next_path_i]
+
+                        # Estimate the parameters of the p(z[k+1] | z[k]) distribution
+                        ksi = inv(inv(sigma) + lambd.T @ inv(psi) @ lambd)
+                        ksi = make_spd(ksi)
+
+                        # Shape [num_samples, dim[l-1]]
+                        rho = (ksi @ (lambd.T @ inv(psi) @ (values - eta).T
+                                     + (inv(sigma) @ mu.reshape([-1, 1])))).T
+
+                        # Estimate all the variables for current path and add
+                        #   up to the global estimates
+                        probs = prob_paths_given_values[path_i].reshape([-1, 1]) # * values_probs
+                        denom += probs.sum()
+                        exp_v += (values * probs).sum(axis=0).reshape([-1, 1])
+                        exp_vv += (values * probs).T @ values
+                        exp_w += (rho * probs).sum(axis=0).reshape([-1, 1])
+                        exp_vw += (values * probs).T @ rho
+                        # E(z @ z.T|s) = Var(z|s) + E^2(z|s)
+                        exp_ww += ksi * probs.sum() + (rho * probs).T @ rho
+
+                    # Rescale the variables
+                    exp_v /= denom
+                    exp_vv /= denom
+                    exp_w /= denom
+                    exp_vw /= denom
+                    exp_ww /= denom
+
+                    # Estimate the parameters
+                    lambd = (exp_vw - exp_v @ exp_w.T) @ \
+                            inv(exp_ww - exp_w @ exp_w.T)
+                    eta = exp_v - lambd @ exp_w
+                    # psi = exp_vv - 2 * exp_v @ eta.T \
+                    #     + eta @ eta.T + 2 * eta @ exp_w.T @ lambd.T \
+                    #     - 2 * exp_vw @ lambd.T + lambd @ exp_ww @ lambd.T
+                    psi = exp_vv - 2 * exp_vw @ lambd.T + \
+                          lambd @ exp_ww @ lambd.T - eta @ eta.T
+                    tau = denom
+
+                    # Reshape eta to its original form
+                    eta = eta.reshape([-1])
+
+                    # Make SPD. psi is diagonal, therefore it is easier
+                    psi = (psi > 0) * psi + (psi <= 0) * SMALL_VALUE
+                    # Make psi diagonal (this is a constraint we defined)
+                    psi = np.diag(np.diag(psi))
+
+                    # Add regularization
+                    lambd2 = lambd @ lambd.T + \
+                             np.eye(len(psi)) * self.var_regularization
+                    l, d, _ = np.linalg.svd(lambd2, hermitian=True)
+                    i = np.argsort(d)[-lambd.shape[1]:]
+                    lambd = l[:, i] @ np.diag(np.sqrt(d[i]))
+                    psi = psi + np.eye(len(psi)) * self.var_regularization
+
+                    # Perform the update
+                    rate = self.update_rate
+                    lambd = dist.lambd * (1 - rate) + lambd * rate
+                    eta = dist.eta * (1 - rate) + eta * rate
+                    psi = dist.psi * (1 - rate) + psi * rate
+                    tau = dist.tau * (1 - rate) + tau * rate
+
+                    # Set the values
+                    dist.lambd, dist.eta, dist.psi, dist.tau =\
+                        lambd, eta, psi, tau
+                    tau_sum += tau
+
+                    # Sample values for next layer
+                    for dist_path_i in range(dist_paths_num):
+                        path = dist_paths[dist_path_i]
+                        path_i = dist_path_i + dist_paths_num * dist_i
+
+                        if layer_i == self.num_layers - 1:
+                            mu, sigma = np.zeros(dim), np.eye(dim)
+                        else:
+                            dist_next = self.layers[layer_i + 1][path[layer_i + 1]]
+                            next_path_i = dist_path_i % math.prod(self.layer_sizes[layer_i + 2:])
+                            mu = dist_next.mu_given_path[next_path_i]
+                            sigma = dist_next.sigma_given_path[next_path_i]
+
+                        # Estimate the parameters of the p(z[k+1] | z[k]) distribution
+                        ksi = inv(inv(sigma) + lambd.T @ inv(psi) @ lambd)
+                        ksi = make_spd(ksi)
+
+                        # Shape [num_samples, dim[l-1]]
+                        rho = (ksi @ (lambd.T @ inv(psi) @ (values - eta).T
+                                     + (inv(sigma) @ mu.reshape([-1, 1])))).T
+
+                        # Sample from the distribution
+                        probs = prob_paths_given_values[path_i] # * values_probs
+                        sample_index = np.random.choice(len(rho), num_samples)
+                        sample_means = rho[sample_index]
+                        sample_probs = probs[sample_index]
+                        z_sample = normal.rvs(cov=ksi, size=num_samples)\
+                            .reshape([num_samples, -1]) + sample_means
+                        z_in_samples.append(z_sample)
+                        z_in_samples_probs.append(sample_probs)
+
+                # Rescale the tau to sum up to 1
+                for dist_i in range(len(layer)):
+                    layer[dist_i].tau /= tau_sum
+
+                # Fill in the samples for next layer
+                z_in_samples = np.concatenate(z_in_samples)
+                z_in_samples_probs = np.concatenate(z_in_samples_probs)
+                z_in_samples_probs /= z_in_samples_probs.sum()
+                samples_index = np.random.choice(len(z_in_samples), num_samples,
+                                                 p=z_in_samples_probs)
+                values = z_in_samples[samples_index]
+                values_probs = z_in_samples_probs[samples_index]
+
+            # Finish iteration
+            if self.use_annealing:
+                self.annealing_v += self.annealing_step
+                self.annealing_v = float(np.clip(self.annealing_v, 0, 1))
+
+            self.compute_path_distributions()
+            stopping_criterion_reached = self.evaluate(data, iter_i + 1)
+            if stopping_criterion_reached:
+                break
+
+        return self.predict(data)
+
     def evaluate(self, data, iter_i):
         """
         :param data:
@@ -299,71 +426,14 @@ class AbstractDGMM:
         """
         _, probs, prob_v = self.predict_path_probs(data)
         clusters = np.argmax(probs, 0)
-        log_lik = np.sum(np.log(prob_v))
+        log_lik = np.sum(np.log(prob_v)) if np.all(prob_v != 0) else -np.inf
 
         if self.evaluator is not None:
-            self.evaluator(iter_i, probs.T, clusters, log_lik)
+            self.evaluator(iter_i, data, probs.T, clusters, log_lik)
 
-        self.log_lik.append(log_lik)
-        stopping_criterion_reached = was_stopping_criterion_reached(
-            self.log_lik, self.stopping_thresh)
-
-        if (not stopping_criterion_reached or
-            not self.plot_predictions or
-            iter_i % self.plot_predictions != 0):
-            return False
-
-        def draw_distribution(mean, cov, ax, color):
-            # How many sigmas to draw. 2 sigmas is >95%
-            N_SIGMA = 2
-            mean, cov = mean[:2], cov[:2,:2]
-            # Since covariance is SPD, svd will produce orthogonal eigenvectors
-            U, S, V = np.linalg.svd(cov)
-            # Calculate the angle of first eigenvector
-            angle = float(np.degrees(np.arctan2(U[1, 0], U[0, 0])))
-
-            # Eigenvalues are now half-width and half-height squared
-            std = np.sqrt(S)
-            ax.add_patch(matplotlib.patches.Ellipse(mean, 2 * std[0] * N_SIGMA,
-                2 * std[1] * N_SIGMA, angle, color=[*color[:3], 0.3], linewidth=0))
-
-        sample, sample_clust = self.random_sample(200)
-
-        colors = cm.rainbow(np.linspace(0, 1, probs.shape[0]))
-
-        # Draw the predictions plot
-        self.ax[0].clear()
-        data_colors = np.clip(probs.T @ colors, 0, 1)
-        self.ax[0].scatter(data[:, 0], data[:, 1], color=data_colors, s=10)
-        self.ax[0].set_aspect('equal', 'box')
-        self.ax[0].set_title("Probabilities")
-
-        # Draw the sample plot
-        self.ax[1].clear()
-        for dist_i in range(self.layer_sizes[0]):
-            s_values = sample[sample_clust == dist_i]
-            color = colors[dist_i]
-            self.ax[1].scatter(s_values[:, 0], s_values[:, 1], color=color,
-                               label="cluster %d" % (dist_i + 1), s=10)
-            dist = self.layers[0][dist_i]
-            for path_i in range(len(dist.mu_given_path)):
-                draw_distribution(dist.mu_given_path[path_i],
-                                  dist.sigma_given_path[path_i],
-                                  self.ax[1], color)
-        self.ax[1].set_xlim(self.ax[0].get_xlim())
-        self.ax[1].set_ylim(self.ax[0].get_ylim())
-        self.ax[1].set_aspect('equal', 'box')
-        self.ax[1].set_title("Sample")
-        self.ax[1].legend()
-
-        # Draw the plots
-        self.fig.suptitle("Iteration %d" % iter_i)
-        plt.draw()
-
-        if self.plot_wait_for_input:
-            plt.waitforbuttonpress()
-        else:
-            plt.pause(0.001)
+        stopping_criterion_reached = \
+            self.stopping_criterion(iter_i, data, probs.T, clusters, log_lik) \
+            if self.stopping_criterion is not None else False
 
         return stopping_criterion_reached
 
