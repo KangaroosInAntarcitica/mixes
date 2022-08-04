@@ -221,15 +221,20 @@ class DGMM:
                         next_values_i = fa.fit_transform(values_i)
                     # next_values[index] = (np.linalg.pinv(fa.components_.T) @
                     #                       (values_i - fa.mean_).T).T
+                    if next_values_i.shape[1] < self.in_dims[layer_i]:
+                        dims_r = self.in_dims[layer_i] - next_values_i.shape[1]
+                        values_r = np.zeros([len(next_values_i), dims_r])
+                        next_values_i = np.concatenate([next_values_i, values_r], 1)
                     next_values[index] = next_values_i
 
                     dist = self.layers[layer_i][dist_i]
                     dist.eta = fa.mean_
 
                     dist.lambd = fa.components_.T
-                    if fa.components_.shape[0] != fa.n_components:
-                        dist.lambd = np.repeat(
-                            dist.lambd, fa.n_components, axis=1)
+                    if dist.lambd.shape[1] < self.in_dims[layer_i]:
+                        dims_r = self.in_dims[layer_i] - dist.lambd.shape[1]
+                        lambd_r = np.zeros([len(dist.lambd), dims_r])
+                        dist.lambd = np.concatenate([dist.lambd, lambd_r], 1)
                     dist.psi = np.diag(fa.noise_variance_)
                     dist.tau = 1 / self.layer_sizes[layer_i]
 
