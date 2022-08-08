@@ -31,10 +31,6 @@ GMN was proposed in the author's research paper. The model creates a network of 
 where next layers in the model have conditional probability distribution based on the previous layer.
 Each layer is a mixture of components, therefore the whole model creates a network of gaussian nodes.
 
-The network is visualized in the following image:
-![GMN structure](https://drive.google.com/uc?id=1nZpoOIUhxw0TU3UKogN8ojMKEY8-_mnJ)
-where `y` is the output and `z` represent variables on different layers.
-
 The most important parameters are: 
 * `layer_sizes` - these are the sizes of layers. The first layer will be used for clusterization
 and therefore its size should correspond to the desired number of clusters.
