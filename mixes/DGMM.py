@@ -24,7 +24,7 @@ class DGMM:
     def __init__(self, layer_sizes, dims,
                  init='kmeans', num_iter=100, num_samples=500,
                  use_annealing=False, annealing_start_v=0.1,
-                 update_rate=0.1,
+                 update_rate=1,
                  stopping_criterion=None,
                  evaluator=None, var_regularization=1e-4):
         def init_layer(layer_size, dim):

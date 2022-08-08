@@ -5,7 +5,7 @@ from .utils import *
 class GMM:
     def __init__(self, num_dists,
                  init='kmeans', num_iter=10,
-                 use_annealing=False, annealing_start_v=0.1, update_rate=0.1,
+                 use_annealing=False, annealing_start_v=0.1, update_rate=1,
                  evaluator=None, stopping_criterion=None,
                  var_regularization=1e-6):
         self.num_dists = num_dists

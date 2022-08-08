@@ -81,3 +81,12 @@ class Evaluator:
     def get_dataframe(self):
         return pd.DataFrame(self.values).set_index('iter')
 
+    @staticmethod
+    def add_metric_function(metric_name, metric_func):
+        """
+        Add a metric function to the known metrics
+        :param metric_name: The name of the metric
+        :param metric_func: The function of the metric that has parameters
+            (data, labels, pred, probs) and outputs a value
+        """
+        Evaluator.METRICS[metric_name] = metric_func

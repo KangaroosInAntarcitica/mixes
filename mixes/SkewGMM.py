@@ -13,9 +13,9 @@ class SkewGMM:
     # R code:
     # https://github.com/cran/mixsmsn/blob/master/R/smsn.mmix.R
 
-    def __init__(self, num_dists, num_iter=10, evaluator=None, update_rate=0.1,
-                 use_annealing=False, annealing_start_v=0.1, stopping_thresh=1e-4,
-                 plot_predictions=False, plot_wait_for_input=False):
+    def __init__(self, num_dists, num_iter=10, evaluator=None, update_rate=1,
+                 use_annealing=False, annealing_start_v=0.1,
+                 stopping_criterion=None,):
         self.num_dists = num_dists
         self.num_iter = num_iter
 
@@ -29,18 +29,7 @@ class SkewGMM:
         self.annealing_step = (1 - self.annealing_v) / self.num_iter / 0.9
 
         self.log_lik = []
-        self.stopping_thresh = stopping_thresh
-
-        self.plot_predictions = plot_predictions
-        self.plot_wait_for_input = plot_wait_for_input
-        if self.plot_predictions:
-            matplotlib.use("TkAgg")
-            plt.ion()
-            self.fig, self.ax = plt.subplots(2, 1)
-            self.ax[0].set_title("Predictions plot")
-            self.ax[1].set_title("Distributions plot")
-            plt.draw()
-            plt.show(block=False)
+        self.stopping_criterion = stopping_criterion
 
     def _initialize_dists(self, data):
         dim = data.shape[1]
@@ -53,49 +42,20 @@ class SkewGMM:
             dist.w = 1 / self.num_dists
 
     def evaluate(self, data, iter_i):
+        prob_v, prob_dists = self.calculate_probs(data)
+        pred = np.argmax(prob_dists, 1)
+        log_lik = np.sum(np.log(prob_v)) if np.all(prob_v != 0) else -np.inf
+
         if self.evaluator is not None:
-            prob_v, prob_dists = self.calculate_probs(data)
-            pred = np.argmax(prob_dists, 1)
-            log_lik = np.sum(np.log(prob_v)) if np.all(prob_v != 0) else -np.inf
-            self.evaluator(iter_i, prob_dists, pred, log_lik)
+            self.evaluator(iter_i, data, prob_dists, pred, log_lik)
 
-        if self.plot_predictions:
-            # Draw the predictions plot
-            # self.ax[0].clear()
-            # data_colors = np.clip(probs.T @ colors, 0, 1)
-            # self.ax[0].scatter(data[:, 0], data[:, 1], color=data_colors, s=10)
-            # self.ax[0].set_aspect('equal', 'box')
-            # self.ax[0].set_title("Probabilities")
+        stopping_criterion_reached = \
+            self.stopping_criterion(iter_i, data, prob_dists, pred, log_lik) \
+                if self.stopping_criterion is not None else False
 
-            # Draw the sample plot
-            plt.sca(self.ax[1])
-            self.ax[1].clear()
-            values, _ = self.random_sample(1000)
-            for dist_i in range(self.num_dists):
-                sns.kdeplot(x=values[:, 0], y=values[:, 1], cmap="rocket",
-                            shade=True, ax=self.ax[1],
-                            bw_adjust=2, thresh=0, levels=20)
-                plt.gca().set_aspect('equal')
-            # self.ax[1].set_xlim(self.ax[0].get_xlim())
-            # self.ax[1].set_ylim(self.ax[0].get_ylim())
-            self.ax[1].set_aspect('equal', 'box')
-            self.ax[1].set_title("Sample")
-            self.ax[1].legend()
-
-            # Draw the plots
-            self.fig.suptitle("Iteration %d" % iter_i)
-            plt.draw()
-
-            if self.plot_wait_for_input:
-                plt.waitforbuttonpress()
-            else:
-                plt.pause(0.001)
-
-        stopping_criterion_reached =\
-            was_stopping_criterion_reached(self.log_lik, self.stopping_thresh)
         return stopping_criterion_reached
 
-    def calculate_probs(self, data, annealing_v=1):
+    def calculate_probs(self, data, annealing_v: float = 1):
         log_probs = []
         for dist_i in range(self.num_dists):
             dist = self.dists[dist_i]

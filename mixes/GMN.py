@@ -12,7 +12,7 @@ class GMN:
     def __init__(self, layer_sizes, dims, plot_evaluations=False,
                  plot_wait_for_input=False,
                  init='kmeans', num_iter=100, num_samples=500,
-                 use_annealing=False, annealing_start_v=0.1, update_rate=0.1,
+                 use_annealing=False, annealing_start_v=0.1, update_rate=1,
                  evaluator=None, hard_distribution=False,
                  stopping_criterion=None,
                  var_regularization=1e-4):
