@@ -1,5 +1,7 @@
 # **Mixes** - repository of mixture models
 
+The repository is available as package in PyPI: [pypi.org/project/mixes](https://pypi.org/project/mixes/).
+
 This repository was created as part of Research paper "Estimation of Gaussian Mixture Networks"
 required as part of Master of Mathematics degree in Computational Mathematics at the University of Waterloo authored
 by Andriy Dmytruk and supervised by Ryan Browne.
@@ -11,6 +13,9 @@ The repository includes implementation of the following mixture models:
 * Gaussian Mixture Network ([GMN](mixes/GMN.py))
 
 ## Usage
+
+You can install the package [mixes](https://pypi.org/project/mixes/) from PyPI:
+`pip install mixes` and use it directly, e.g.: `from mixes import Evaluator, GMM, GMN`.
 
 The implementation is present in the [mixes/](mixes/) folder.
 You can see an example of usage in the [experiments/example.ipynb](experiments/example.ipynb) jupyter notebook.

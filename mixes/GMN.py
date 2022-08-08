@@ -1,16 +1,9 @@
-import numpy as np
-import math
 from scipy.stats import multivariate_normal as normal
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib.patches
-import matplotlib
 from .utils import *
 
 
 class GMN:
-    def __init__(self, layer_sizes, dims, plot_evaluations=False,
-                 plot_wait_for_input=False,
+    def __init__(self, layer_sizes, dims,
                  init='kmeans', num_iter=100, num_samples=500,
                  use_annealing=False, annealing_start_v=0.1, update_rate=1,
                  evaluator=None, hard_distribution=False,
@@ -38,18 +31,6 @@ class GMN:
         self.num_samples = num_samples
 
         self.paths = get_paths_permutations(self.layer_sizes)
-
-        # Display and computation parameters
-        self.plot_wait_for_intput = plot_wait_for_input
-        self.plot_evaluations = int(plot_evaluations)
-        if self.plot_evaluations:
-            matplotlib.use("TkAgg")
-            plt.ion()
-            self.fig, self.ax = plt.subplots(2, 1)
-            self.ax[0].set_title("Predictions plot")
-            self.ax[0].set_title("Distributions plot")
-            plt.draw()
-            plt.show(block=False)
 
         self.init = init
         self.was_init = False
@@ -293,6 +274,9 @@ class GMN:
             raise ValueError("Initialization '%s' is not supported" % self.init)
 
     def plot_predictions(self, data, probs=None, ax=None):
+        import matplotlib.pyplot as plt
+        import matplotlib.cm as cm
+
         if ax is not None:
             plt.sca(ax)
         if probs is None:
@@ -309,6 +293,11 @@ class GMN:
     def plot_distributions(self, data, probs=None, ax=None, draw_samples=False,
                            different_path_colors=False, use_pi=False, colors=None,
                            axis=[0, 1]):
+        import matplotlib.pyplot as plt
+        import matplotlib.cm as cm
+        import matplotlib.patches
+        import matplotlib
+
         def draw_distribution(mean, cov, pi, ax, color):
             # How many sigmas to draw. 2 sigmas is >95%
             N_SIGMA = 1
@@ -382,25 +371,6 @@ class GMN:
         stopping_criterion_reached = \
             self.stopping_criterion(iter_i, data, probs.T, clusters, log_lik) \
             if self.stopping_criterion is not None else False
-
-        if not self.plot_evaluations or (not stopping_criterion_reached and
-                                          iter_i % self.plot_evaluations != 0):
-            return False
-
-        # Draw the plots
-        self.ax[0].clear()
-        self.ax[1].clear()
-        self.plot_predictions(data, probs=probs, ax=self.ax[0])
-        self.plot_distributions(data, probs=probs, ax=self.ax[1])
-        self.ax[1].xlim(self.ax[0].get_xlim())
-        self.ax[1].ylim(self.ax[0].get_ylim())
-        self.fig.suptitle("Iteration %d" % iter_i)
-        plt.draw()
-
-        if self.plot_wait_for_intput:
-            plt.waitforbuttonpress()
-        else:
-            plt.pause(0.001)
 
         return stopping_criterion_reached
 

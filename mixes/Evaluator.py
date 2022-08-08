@@ -1,4 +1,3 @@
-import pandas as pd
 import numpy as np
 from sklearn import metrics
 from itertools import permutations
@@ -79,6 +78,7 @@ class Evaluator:
         return self.values
 
     def get_dataframe(self):
+        import pandas as pd
         return pd.DataFrame(self.values).set_index('iter')
 
     @staticmethod

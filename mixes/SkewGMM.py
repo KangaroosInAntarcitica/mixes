@@ -1,9 +1,6 @@
 from scipy.stats import multivariate_normal as normal
 from scipy.stats import mvn
 from .utils import *
-import matplotlib.pyplot as plt
-import matplotlib
-import seaborn as sns
 
 
 class SkewGMM:

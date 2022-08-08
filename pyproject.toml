@@ -1,0 +1,35 @@
+# pyproject.toml
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mixes"
+version = "1.0"
+description = "A package of mixture models including Skew GMM, GMN and DGMM"
+readme = "README.md"
+authors = [{ name = "Andriy Dmytruk", email = "Andr.Dmytruk@gmail.com" }]
+license = { file = "MIT-LICENSE.txt" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["mixture models", "GMN", "DGMM", "Skew GMM", "GMM"]
+dependencies = [
+    "scikit-learn >= 0.24.1",
+    "numpy >= 1.20.1",
+    "scipy >= 1.6.2",
+]
+requires-python = ">=3.0"
+
+[tool.setuptools]
+packages = ["mixes"]
+
+[project.optional-dependencies]
+plotting = ["matplotlib >= 3.3.4"]
+dataframes = ["pandas >= 1.2.4"]
+
+[project.urls]
+Homepage = "https://github.com/KangaroosInAntarcitica/mixes"
