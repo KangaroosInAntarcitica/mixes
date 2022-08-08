@@ -1,6 +1,6 @@
 # **Mixes** - repository of mixture models
 
-The repository is available as package in PyPI: [pypi.org/project/mixes](https://pypi.org/project/mixes/).
+**The repository is available as package in PyPI: [pypi.org/project/mixes](https://pypi.org/project/mixes/).**
 
 This repository was created as part of Research paper "Estimation of Gaussian Mixture Networks"
 required as part of Master of Mathematics degree in Computational Mathematics at the University of Waterloo authored
