@@ -20,7 +20,7 @@ class Evaluator:
     }
 
     def __init__(self, labels=None, *metrics, show_log_lik=True,
-                 print_metrics=True):
+                 print_metrics=True, calc_frequency=1):
         self.show_log_lik = show_log_lik
         self.metrics = {}
 
@@ -39,10 +39,15 @@ class Evaluator:
         self.values['iter'] = []
 
         self.print_metrics = print_metrics
+        self.calc_i = 0
+        self.calc_frequency = calc_frequency
 
     def __call__(self, iter_i, data, probs, pred, log_lik):
-        m = []
+        if self.calc_i % self.calc_frequency != 0:
+            return
+        self.calc_i += 1
 
+        m = []
         self.values['iter'].append(iter_i)
 
         if self.show_log_lik:

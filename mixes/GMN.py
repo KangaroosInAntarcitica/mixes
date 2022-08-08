@@ -52,6 +52,7 @@ class GMN:
             plt.show(block=False)
 
         self.init = init
+        self.was_init = False
 
         self.use_annealing = use_annealing
         self.annealing_v = annealing_start_v if use_annealing else 1
@@ -441,7 +442,9 @@ class GMN:
         num_samples = self.num_samples
         self.out_dims[0] = data.shape[1]
 
-        self._init_params(data)
+        if not self.was_init:
+            self._init_params(data)
+            self.was_init = True
         self.compute_path_distributions()
         self.evaluate(data, 0)
 

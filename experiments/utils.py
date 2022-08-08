@@ -2,17 +2,25 @@ import pandas as pd
 from mixes import Evaluator
 import numpy as np
 from sklearn import metrics
+import matplotlib.colors as pltcolor
+
+
+UCI_URL = 'https://archive.ics.uci.edu/ml/machine-learning-databases/'
+COLOR_GREEN = pltcolor.hex2color("#48ff97")
+COLOR_BLUE = pltcolor.hex2color("#4871ff")
+COLOR_ORANGE = pltcolor.hex2color("#fdaa24")
+COLOR_RED = pltcolor.hex2color("#ff485d")
 
 
 def test_algorithms_on_data(
         alg_functions, alg_names, data, labels, num_repeats=1,
-        verbose=True, return_values=False):
+        verbose=True, return_evaluators=False):
     assert len(alg_functions) == len(alg_names)
     print("Num datapoints: %d, num features: %d, num clusters: %d" %
       (data.shape[0], data.shape[1], len(np.unique(labels))))
 
     result = []
-    values = {}
+    evals = {}
 
     for alg_i in range(len(alg_names)):
         silhouette = []
@@ -20,6 +28,9 @@ def test_algorithms_on_data(
         ari = []
         log_lik = []
         num_repeated = 0
+
+        if return_evaluators:
+            evals[alg_names[alg_i]] = []
 
         while num_repeated < num_repeats:
             if verbose:
@@ -41,14 +52,11 @@ def test_algorithms_on_data(
             if len(evaluator.get_values()["log_lik"]) > 0:
                 log_lik.append(evaluator.get_result_metric('log_lik'))
 
+            if return_evaluators:
+                evals[alg_names[alg_i]].append(evaluator)
+
         best_i = np.argmax(silhouette)
         print("")
-        values[alg_names[alg_i]] = {
-            "log_lik": log_lik,
-            "silhouette": silhouette,
-            "accuracy": accuracy,
-            "ari": ari
-        }
         result.append([
             np.mean(silhouette),
             silhouette[best_i],
@@ -66,8 +74,8 @@ def test_algorithms_on_data(
              "log lik", "log lik best"]
     result = pd.DataFrame(result, columns=columns, index=alg_names)
 
-    if return_values:
-        return result, values
+    if return_evaluators:
+        return result, evals
     return result
 
 def map_labels(labels):
@@ -85,7 +93,7 @@ def load_olive():
     return data, labels
 
 def load_ecoli():
-    ECOLI_DATA_URL = 'https://archive.ics.uci.edu/ml/machine-learning-databases/ecoli/ecoli.data'
+    ECOLI_DATA_URL = UCI_URL + 'ecoli/ecoli.data'
     data = pd.read_csv(ECOLI_DATA_URL, header=None, delim_whitespace=True)
 
     data, labels = data.values[:,1:-1].astype('float'), data.values[:,-1]
@@ -101,12 +109,47 @@ def load_vehicle():
     return data, labels
 
 def load_satellite():
-    DATA_URL_TRN = 'https://archive.ics.uci.edu/ml/machine-learning-databases/statlog/satimage/sat.trn'
-    DATA_URL_TST = 'https://archive.ics.uci.edu/ml/machine-learning-databases/statlog/satimage/sat.tst'
+    DATA_URL_TRN = UCI_URL + 'statlog/satimage/sat.trn'
+    DATA_URL_TST = UCI_URL + 'statlog/satimage/sat.tst'
     data_trn = pd.read_csv(DATA_URL_TRN, header=None, delim_whitespace=True)
     data_tst = pd.read_csv(DATA_URL_TST, header=None, delim_whitespace=True)
     data = pd.concat([data_trn, data_tst])
 
     data, labels = data.values[:,:-1], data.values[:,-1]
+    labels = map_labels(labels)
+    return data, labels
+
+def load_gestures():
+    """
+    Source: https://archive.ics.uci.edu/ml/datasets/Gesture+Phase+Segmentation
+    """
+    DATA_URL = UCI_URL + '00302/gesture_phase_dataset.zip'
+
+    import tempfile
+    import zipfile
+    import os
+    import urllib.request
+
+    # Make temporary folder (will be deleted on PC restart)
+    folder = tempfile.mkdtemp()
+
+    # Download zip folder
+    response = urllib.request.urlopen(DATA_URL)
+    zip_file = '%s/gesture.zip' % folder
+    with open(zip_file,'wb') as output:
+      output.write(response.read())
+
+    # Extract zip folder
+    with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+        zip_ref.extractall(folder)
+
+    # Read the files and concatenate
+    filenames = np.sort(["%s/%s" % (folder, f) for f in os.listdir(folder)
+                    if f.endswith('raw.csv')])
+
+    # Return as pandas dataframe
+    df = pd.concat([pd.read_csv(f) for f in filenames])\
+        .reset_index().drop(columns='index')
+    data, labels = df.values[:,:-2], df.values[:,-1]
     labels = map_labels(labels)
     return data, labels
