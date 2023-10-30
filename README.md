@@ -77,7 +77,7 @@ Lower values correspond to a more flattened objective function, while `1` corres
 annealing. Starting for the `annealing_start_v`, the annealing value will be increased to `1` during model fitting
 if `use_annealing` is set to true.
 
-### Regularizatoin
+### Regularization
 
 GMM, GMN and DGMM models have the variance regularization parameter `var_regularization`. 
 Regularization makes the covariances larger on each step. This keeps the covariance matrix from becoming
