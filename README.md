@@ -22,6 +22,17 @@ You can see an example of usage in the [experiments/example.ipynb](experiments/e
 
 All the experiments that were performed as part of the research paper can also be found inside the [experiments/](experiments/) folder.
 
+Kindly provide a citation to the research paper if this work proves useful to you:
+```bib
+@thesis{GMN,
+	title        = {Estimation of Gaussian Mixture Networks},
+	author       = {Andriy Dmytruk},
+	year         = 2022,
+	type         = {mathesis},
+	institution  = {University of Waterloo}
+}
+```
+
 ## Models description
 
 ### Skew Gaussian Mixture Model
@@ -47,7 +58,7 @@ dimensions in a non-increasing order.
 * `init` - determines how the model is initialized. Use `kmeans` (default) for initialization by `K-Means` and 
 factor analysis on each layer. Use `random` for a completely random initialization.
 
-
+The paper can be found on [Research Gate](https://www.researchgate.net/publication/365889016_Estimation_of_Gaussian_Mixture_Networks) or the [University of Waterloo website](https://uwaterloo.ca/computational-mathematics/sites/ca.computational-mathematics/files/uploads/files/dmytruk_andriy.pdf).
 
 ### Deep Gaussian Mixture Model
 
